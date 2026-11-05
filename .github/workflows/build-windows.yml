@@ -1,15 +1,16 @@
-name: Build Windows EXE
+name: Build and publish Windows EXE
 on:
   workflow_dispatch:
   push:
+    branches: [main]
     paths:
       - 'app.py'
       - '.github/workflows/build-windows.yml'
 jobs:
   build:
-    runs-on: windows-latest
+    runs-on: windows-2022
     permissions:
-      contents: read
+      contents: write
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -19,9 +20,28 @@ jobs:
         run: python -m pip install pyinstaller==6.16.0
       - name: Compile Windows executable
         run: python -m PyInstaller --noconfirm --clean --onefile --windowed --name DNS_DHCP_Manager_Pro app.py
-      - name: Upload EXE
+      - name: Validate executable and package ZIP
+        shell: pwsh
+        run: |
+          $exe = 'dist/DNS_DHCP_Manager_Pro.exe'
+          if (!(Test-Path $exe)) { throw 'Executable missing' }
+          $bytes = [System.IO.File]::ReadAllBytes((Resolve-Path $exe))
+          if ($bytes.Length -lt 1024 -or $bytes[0] -ne 77 -or $bytes[1] -ne 90) { throw 'Invalid Windows PE executable' }
+          Compress-Archive -Path $exe -DestinationPath 'DNS_DHCP_Manager_Pro_Windows_x64.zip' -Force
+      - name: Upload ZIP artifact
         uses: actions/upload-artifact@v4
         with:
           name: DNS_DHCP_Manager_Pro_Windows_x64
-          path: dist/DNS_DHCP_Manager_Pro.exe
+          path: DNS_DHCP_Manager_Pro_Windows_x64.zip
           if-no-files-found: error
+      - name: Publish latest ZIP as GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: pwsh
+        run: |
+          gh release view latest --repo "${{ github.repository }}" *> $null
+          if ($LASTEXITCODE -eq 0) {
+            gh release upload latest DNS_DHCP_Manager_Pro_Windows_x64.zip --clobber --repo "${{ github.repository }}"
+          } else {
+            gh release create latest DNS_DHCP_Manager_Pro_Windows_x64.zip --title "DNS DHCP Manager Pro - dernière compilation" --notes "Version de diagnostic. Ne configure pas encore AD DS/DNS/DHCP." --target "${{ github.sha }}" --repo "${{ github.repository }}"
+          }
