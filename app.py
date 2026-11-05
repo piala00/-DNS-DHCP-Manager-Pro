@@ -5,6 +5,7 @@ import subprocess
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
 from pathlib import Path
+import server_core
 
 def powershell(script):
     p = subprocess.run(["powershell.exe","-NoProfile","-NonInteractive","-Command",script],capture_output=True,text=True,timeout=45)
@@ -21,7 +22,7 @@ foreach($n in @('AD-Domain-Services','DNS','DHCP')) { $f=Get-WindowsFeature -Nam
     return json.loads(powershell(script))
 
 root=tk.Tk()
-root.title("DNS & DHCP Manager Pro — Diagnostic v0.3")
+root.title("DNS & DHCP Manager Pro — Administration v0.4")
 root.geometry("920x650")
 root.minsize(580,440)
 try:
@@ -159,7 +160,7 @@ $r | ConvertTo-Json -Depth 6 -Compress"""
     try:
         status.set("Analyse "+kind.upper()+" en cours...")
         root.update_idletasks()
-        data=json.loads(powershell(scripts[kind]))
+        data=server_core.inspect(kind)
         show(data)
         status.set("Analyse "+kind.upper()+" terminée")
     except Exception as e:
