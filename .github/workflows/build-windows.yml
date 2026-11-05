@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - 'app.py'
+      - 'server_core.py'
       - 'tests/**'
       - '.github/workflows/build-windows.yml'
 jobs:
@@ -31,6 +32,8 @@ jobs:
           }
       - name: Run automated code tests
         run: python tests/test_static.py
+      - name: Test Windows Server backend
+        run: python -m unittest discover -s tests -p 'test_server_core.py' -v
       - name: Test diagnostic functions
         run: python tests/test_diagnostics.py
       - name: Install PyInstaller
@@ -61,6 +64,6 @@ jobs:
           if ($existing -eq 'latest') {
             gh release upload latest DNS_DHCP_Manager_Pro_Windows_x64.zip --clobber --repo "${{ github.repository }}"
           } else {
-            gh release create latest DNS_DHCP_Manager_Pro_Windows_x64.zip --title "DNS DHCP Manager Pro - dernière compilation" --notes "Version de diagnostic. Ne configure pas encore AD DS/DNS/DHCP." --target "${{ github.sha }}" --repo "${{ github.repository }}"
+            gh release create latest DNS_DHCP_Manager_Pro_Windows_x64.zip --title "DNS DHCP Manager Pro - dernière compilation" --notes "Version de développement : diagnostic et inspection AD DS/DNS/DHCP, installation des rôles sous confirmation. Validation laboratoire requise." --target "${{ github.sha }}" --repo "${{ github.repository }}"
           }
           if ($LASTEXITCODE -ne 0) { throw "Échec de publication du ZIP dans GitHub Releases." }
