@@ -39,9 +39,11 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         shell: pwsh
         run: |
-          gh release view latest --repo "${{ github.repository }}" *> $null
-          if ($LASTEXITCODE -eq 0) {
+          $existing = gh release list --repo "${{ github.repository }}" --json tagName --jq '.[] | select(.tagName == "latest") | .tagName'
+          if ($LASTEXITCODE -ne 0) { throw "Impossible de consulter les Releases GitHub." }
+          if ($existing -eq 'latest') {
             gh release upload latest DNS_DHCP_Manager_Pro_Windows_x64.zip --clobber --repo "${{ github.repository }}"
           } else {
             gh release create latest DNS_DHCP_Manager_Pro_Windows_x64.zip --title "DNS DHCP Manager Pro - dernière compilation" --notes "Version de diagnostic. Ne configure pas encore AD DS/DNS/DHCP." --target "${{ github.sha }}" --repo "${{ github.repository }}"
           }
+          if ($LASTEXITCODE -ne 0) { throw "Échec de publication du ZIP dans GitHub Releases." }
