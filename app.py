@@ -45,6 +45,15 @@ overview=ttk.Frame(tabs,padding=12)
 results=ttk.Frame(tabs,padding=12)
 tabs.add(overview,text="Configuration")
 tabs.add(results,text="Rapport détaillé")
+admin=ttk.Frame(tabs,padding=12)
+tabs.add(admin,text="Administration")
+admin.columnconfigure(0,weight=1)
+ttk.Label(admin,text="Gestion des services Windows Server",font=("Segoe UI",14,"bold")).grid(row=0,column=0,sticky="w",pady=(0,12))
+ttk.Label(admin,text="Inspectez Active Directory, DNS et DHCP avant toute intervention.",wraplength=650).grid(row=1,column=0,sticky="w",pady=(0,12))
+role_box=ttk.LabelFrame(admin,text="Installation des rôles manquants",padding=12)
+role_box.grid(row=3,column=0,sticky="ew",pady=(12,0))
+ttk.Label(role_box,text="Installation uniquement sur confirmation. Aucun rôle déjà installé ne sera supprimé.",wraplength=620).pack(anchor="w",pady=(0,8))
+
 overview.columnconfigure(0,weight=1)
 overview.rowconfigure(2,weight=1)
 fields=ttk.LabelFrame(overview,text="Paramètres proposés",padding=12)
@@ -131,6 +140,63 @@ def export():
     if path:
         Path(path).write_text(json.dumps(current_report,indent=2,ensure_ascii=False),encoding="utf-8")
         status.set("Rapport exporté")
+def inspect_service(kind):
+    scripts={
+      "ad": """$ErrorActionPreference='Stop'
+$r=[ordered]@{Service='Active Directory';Computer=$env:COMPUTERNAME;DomainJoined=$false;Domain=$null;Forest=$null;DomainController=$false;Error=$null}
+try {$cs=Get-CimInstance Win32_ComputerSystem; $r.DomainJoined=[bool]$cs.PartOfDomain; $r.Domain=$cs.Domain} catch {$r.Error=$_.Exception.Message}
+try {Import-Module ActiveDirectory -ErrorAction Stop; $d=Get-ADDomain -ErrorAction Stop; $r.Domain=$d.DNSRoot; $r.Forest=$d.Forest; $r.DomainController=[bool](Get-ADDomainController -Identity $env:COMPUTERNAME -ErrorAction SilentlyContinue)} catch {$r.Error=$_.Exception.Message}
+$r | ConvertTo-Json -Depth 6 -Compress""",
+      "dns": """$ErrorActionPreference='Stop'
+$r=[ordered]@{Service='DNS';Computer=$env:COMPUTERNAME;ServiceStatus=$null;Zones=@();Error=$null}
+try {$r.ServiceStatus=(Get-Service DNS -ErrorAction Stop).Status.ToString(); Import-Module DnsServer -ErrorAction Stop; $r.Zones=@(Get-DnsServerZone -ErrorAction Stop | Select-Object ZoneName,ZoneType,IsDsIntegrated)} catch {$r.Error=$_.Exception.Message}
+$r | ConvertTo-Json -Depth 6 -Compress""",
+      "dhcp": """$ErrorActionPreference='Stop'
+$r=[ordered]@{Service='DHCP';Computer=$env:COMPUTERNAME;ServiceStatus=$null;Scopes=@();Authorization=@();Error=$null}
+try {$r.ServiceStatus=(Get-Service DHCPServer -ErrorAction Stop).Status.ToString(); Import-Module DhcpServer -ErrorAction Stop; $r.Scopes=@(Get-DhcpServerv4Scope -ErrorAction Stop | Select-Object ScopeId,Name,StartRange,EndRange,State); $r.Authorization=@(Get-DhcpServerInDC -ErrorAction SilentlyContinue | Select-Object DnsName,IPAddress)} catch {$r.Error=$_.Exception.Message}
+$r | ConvertTo-Json -Depth 6 -Compress"""
+    }
+    try:
+        status.set("Analyse "+kind.upper()+" en cours...")
+        root.update_idletasks()
+        data=json.loads(powershell(scripts[kind]))
+        show(data)
+        status.set("Analyse "+kind.upper()+" terminée")
+    except Exception as e:
+        status.set("Erreur d'analyse "+kind.upper())
+        messagebox.showerror("Analyse "+kind.upper(),str(e))
+def install_missing_roles():
+    if not ctypes.windll.shell32.IsUserAnAdmin():
+        messagebox.showerror("Administrateur requis","Relancez le logiciel en tant qu'administrateur.")
+        return
+    if not messagebox.askyesno("Installation des rôles","Installer uniquement les rôles AD DS, DNS et DHCP manquants sur CE serveur ?\\n\\nCette opération peut modifier Windows Server. Elle ne crée pas de forêt et ne configure pas DHCP."):
+        return
+    script="""$ErrorActionPreference='Stop'
+Import-Module ServerManager -ErrorAction Stop
+$names=@('AD-Domain-Services','DNS','DHCP')
+$missing=@($names | Where-Object { -not (Get-WindowsFeature -Name $_ -ErrorAction Stop).Installed })
+if ($missing.Count -eq 0) { [pscustomobject]@{Result='Already installed';Roles=@();RestartNeeded=$false} | ConvertTo-Json -Compress; exit 0 }
+$r=Install-WindowsFeature -Name $missing -IncludeManagementTools -ErrorAction Stop
+if (-not $r.Success) { throw 'Windows role installation did not succeed.' }
+[pscustomobject]@{Result='Installed';Roles=@($missing);RestartNeeded=[bool]($r.RestartNeeded -ne 'No')} | ConvertTo-Json -Compress
+"""
+    try:
+        status.set("Installation en cours — ne fermez pas le programme")
+        root.update_idletasks()
+        proc=subprocess.run(["powershell.exe","-NoProfile","-NonInteractive","-Command",script],capture_output=True,text=True,timeout=900)
+        if proc.returncode:
+            raise RuntimeError(proc.stderr.strip() or "Installation échouée")
+        show(json.loads(proc.stdout.strip()))
+        status.set("Installation terminée — vérifiez le redémarrage requis")
+    except Exception as e:
+        status.set("Installation échouée")
+        messagebox.showerror("Installation",str(e))
+actions=ttk.Frame(admin)
+actions.grid(row=2,column=0,sticky="w")
+ttk.Button(actions,text="Inspecter Active Directory",command=lambda:inspect_service("ad")).pack(anchor="w",pady=3)
+ttk.Button(actions,text="Inspecter DNS",command=lambda:inspect_service("dns")).pack(anchor="w",pady=3)
+ttk.Button(actions,text="Inspecter DHCP",command=lambda:inspect_service("dhcp")).pack(anchor="w",pady=3)
+ttk.Button(role_box,text="Installer les rôles manquants",command=install_missing_roles).pack(anchor="w")
 ttk.Button(buttons,text="Détecter le serveur",command=scan).pack(side="left",padx=(0,6))
 ttk.Button(buttons,text="Générer une proposition",command=preview).pack(side="left",padx=(0,6))
 ttk.Button(buttons,text="Exporter le rapport",command=export).pack(side="left")
