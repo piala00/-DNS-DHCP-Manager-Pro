@@ -125,7 +125,7 @@ def run_dialog(app, p, runner, click=None):
     d.show()
     d.start()
     t0 = time.time()
-    while d.result is None:
+    while d.outcome is None:
         app.processEvents()
         if click and d.btn_keep.isEnabled():
             (d.btn_keep if click == "keep" else d.btn_undo).click()
@@ -135,20 +135,30 @@ def run_dialog(app, p, runner, click=None):
     return d
 
 
+def dispose(app, d):
+    """Détruit la fenêtre dans l'ordre (avant QApplication), sinon plantage à la sortie du processus."""
+    from PySide6.QtCore import QEvent
+    d.close()
+    d.worker.wait(30000)
+    d.deleteLater()
+    app.sendPostedEvents(None, QEvent.DeferredDelete)
+    app.processEvents()
+
+
 def test_dialog_keep_writes_result(app, tmp_path):
     d = run_dialog(app, plan(tmp_path), FakeRunner(), click="keep")
-    assert d.result.status == "kept" and json.loads((tmp_path / "res.json").read_text("utf-8"))["status"] == "kept"
-    d.close()
+    assert d.outcome.status == "kept" and json.loads((tmp_path / "res.json").read_text("utf-8"))["status"] == "kept"
+    dispose(app, d)
 
 
 def test_dialog_timeout_rolls_back_automatically(app, tmp_path):
     r = FakeRunner()
     d = run_dialog(app, plan(tmp_path, confirm_timeout_s=2), r, click=None)   # personne ne clique
-    assert d.result.status == "rolled_back" and r.calls[-1][:2] == ["netsh", "-f"]
-    d.close()
+    assert d.outcome.status == "rolled_back" and r.calls[-1][:2] == ["netsh", "-f"]
+    dispose(app, d)
 
 
 def test_dialog_undo_button(app, tmp_path):
     d = run_dialog(app, plan(tmp_path), FakeRunner(), click="undo")
-    assert d.result.status == "rolled_back"
-    d.close()
+    assert d.outcome.status == "rolled_back"
+    dispose(app, d)

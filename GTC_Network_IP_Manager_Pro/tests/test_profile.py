@@ -108,21 +108,19 @@ def _local_ifs():
     return fake_collectors().interfaces()
 
 
-def test_post_apply_verification_requires_domain_controller(app, tmp_path):
-    from gtc_ipm.ui.apply_dialog import ApplyDialog
+def test_post_apply_verification_requires_domain_controller():
+    from gtc_ipm.ui.apply_dialog import make_verify
     from test_connectors import fake_collectors
     col = fake_collectors()
     itf = col.interfaces()[0]
     plan = nc.NetPlan(7, "x", itf.ipv4, itf.prefix, itf.gateway, [], check_hosts=["172.168.4.245"])
-    d = ApplyDialog(plan, collectors=col, settle_s=0)
     col.ping = lambda h, t: False
     col.tcp_from = lambda *a, **k: False
-    ok, lines = d._make_verify(col)()
+    ok, lines = make_verify(plan, col)()
     assert not ok and any("NON joignable" in x for x in lines)               # DC muet => retour arrière
     col.ping = lambda h, t: True
-    ok, lines = d._make_verify(col)()
+    ok, lines = make_verify(plan, col)()
     assert ok and any("joignable." in x and "NON" not in x for x in lines)
     plan2 = nc.NetPlan(7, "x", "10.9.9.9", 24, "", [], check_hosts=["172.168.4.245"])
-    ok, lines = ApplyDialog(plan2, collectors=col, settle_s=0)._make_verify(col)()
+    ok, lines = make_verify(plan2, col)()
     assert not ok and "n'a pas pris" in lines[0]                              # la carte n'a pas pris l'IP
-    d.close()

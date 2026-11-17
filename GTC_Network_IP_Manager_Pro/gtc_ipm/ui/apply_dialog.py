@@ -21,8 +21,8 @@ class _Worker(QThread):
     ask = Signal(int, str)          # délai, résumé de vérification
     finished_result = Signal(object)
 
-    def __init__(self, plan, runner, verify, settle_s):
-        super().__init__()
+    def __init__(self, plan, runner, verify, settle_s, parent=None):
+        super().__init__(parent)
         self.plan, self.runner, self.verify, self.settle_s = plan, runner, verify, settle_s
         self._answer = threading.Event()
         self._keep = False
@@ -45,11 +45,38 @@ class _Worker(QThread):
         self.finished_result.emit(res)
 
 
+def make_verify(plan, collectors):
+    """Vérification après application : l'adresse est active et (si connus) le contrôleur de domaine répond."""
+    def verify():
+        if collectors is None:
+            return True, ["(vérification non disponible)"]
+        me = next((i for i in collectors.interfaces() if i.ipv4 == plan.ip), None)
+        if me is None:
+            return False, [f"La carte n'a pas pris l'adresse {plan.ip}."]
+        lines = [f"Adresse {plan.ip}/{plan.prefix} active sur « {me.alias} »."]
+        ok = True
+        if plan.check_hosts:                       # au moins un contrôleur de domaine doit répondre
+            ups = []
+            for h in plan.check_hosts:
+                up = bool(collectors.ping(h, 1500) or collectors.tcp_from(plan.ip, h, 389, 3.0)
+                          or collectors.tcp_from(plan.ip, h, 53, 3.0))
+                ups.append(up)
+                lines.append(f"Contrôleur de domaine {h} : " + ("joignable." if up else "NON joignable."))
+            ok = any(ups)
+        if plan.gateway:
+            net_ok = any(p.internet_ok for p in inet.detect_internet_paths([me], collectors.tcp_from))
+            lines.append("Internet : " + ("OK." if net_ok else "ÉCHEC (voir passerelle)."))
+            if not plan.check_hosts:
+                ok = net_ok
+        return ok, lines
+    return verify
+
+
 class ApplyDialog(QDialog):
     def __init__(self, plan: nc.NetPlan, runner: Callable = nc.default_runner,
                  collectors=None, settle_s: float = 4.0, parent=None):
         super().__init__(parent)
-        self.plan, self.result = plan, None
+        self.plan, self.outcome = plan, None
         self.setWindowTitle("Application de la configuration réseau")
         self.resize(640, 460)
         lay = QVBoxLayout(self)
@@ -77,43 +104,14 @@ class ApplyDialog(QDialog):
         self._left = 0
         self.timer = QTimer(self)
         self.timer.timeout.connect(self._tick)
-        verify = self._make_verify(collectors)
-        self.worker = _Worker(plan, runner, verify, settle_s)
+        verify = make_verify(plan, collectors)
+        self.worker = _Worker(plan, runner, verify, settle_s, self)
         self.worker.say.connect(self.log.appendPlainText)
         self.worker.ask.connect(self._on_ask)
         self.worker.finished_result.connect(self._on_done)
 
     def start(self) -> None:
         self.worker.start()
-
-    def _make_verify(self, collectors):
-        plan = self.plan
-
-        def verify():
-            if collectors is None:
-                return True, ["(vérification non disponible)"]
-            itfs = collectors.interfaces()
-            lines: list[str] = []
-            ok = True
-            me = next((i for i in itfs if i.ipv4 == plan.ip), None)
-            if me is None:
-                return False, [f"La carte n'a pas pris l'adresse {plan.ip}."]
-            lines.append(f"Adresse {plan.ip}/{plan.prefix} active sur « {me.alias} ».")
-            for h in plan.check_hosts:               # contrôleur(s) de domaine : au moins un doit répondre
-                up = collectors.ping(h, 1500) or collectors.tcp_from(plan.ip, h, 389, 3.0) \
-                    or collectors.tcp_from(plan.ip, h, 53, 3.0)
-                lines.append(f"Contrôleur de domaine {h} : " + ("joignable." if up else "NON joignable."))
-                ok = ok and up if len(plan.check_hosts) == 1 else ok
-            if len(plan.check_hosts) > 1:
-                ok = any("joignable." in x and "NON" not in x for x in lines)
-            if plan.gateway:
-                paths = inet.detect_internet_paths([me], collectors.tcp_from)
-                net_ok = any(p.internet_ok for p in paths)
-                lines.append("Internet : " + ("OK." if net_ok else "ÉCHEC (voir passerelle)."))
-                if not plan.check_hosts:
-                    ok = ok and net_ok
-            return ok, lines
-        return verify
 
     def _on_ask(self, timeout: int, summary: str) -> None:
         self.log.appendPlainText("\n--- Vérification ---\n" + summary)
@@ -136,7 +134,7 @@ class ApplyDialog(QDialog):
         self.worker.answer(keep)
 
     def _on_done(self, res) -> None:
-        self.result = res
+        self.outcome = res
         self.timer.stop()
         label = {"kept": "Configuration conservée.", "rolled_back": "Ancienne configuration restaurée.",
                  "failed": "Échec : rien n'a été modifié ou tout a été annulé.",

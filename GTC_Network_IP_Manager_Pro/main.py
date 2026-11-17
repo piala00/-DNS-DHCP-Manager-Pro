@@ -36,6 +36,7 @@ def _selftest(out_path: str) -> int:
 
 def _netcfg_apply(plan_path: str) -> int:
     """Mode helper (lancé avec élévation) : applique un plan statique avec retour arrière."""
+    from PySide6.QtCore import QEvent
     from PySide6.QtWidgets import QApplication
     from gtc_ipm.core import netconfig as nc
     from gtc_ipm.core import orchestrator as orch
@@ -47,7 +48,12 @@ def _netcfg_apply(plan_path: str) -> int:
     dlg.show()
     dlg.start()
     app.exec()
-    return 0 if dlg.result is not None and dlg.result.status == "kept" else 1
+    kept = dlg.outcome is not None and dlg.outcome.status == "kept"
+    dlg.worker.wait(30000)          # nettoyage ordonné : la fenêtre doit disparaître AVANT l'application Qt
+    dlg.deleteLater()
+    app.sendPostedEvents(None, QEvent.DeferredDelete)
+    app.processEvents()
+    return 0 if kept else 1
 
 
 def main() -> int:
