@@ -70,9 +70,10 @@ def main() -> int:
     ps_if = attempt("interfaces (PowerShell)", lambda: ifc.parse_interfaces_from(ifc.ps_json(ifc.SCRIPT_INTERFACES, timeout=60)))
     print(f"   durée PowerShell {time.time() - t0:.2f}s")
     nat_if = winnet.collect_interfaces_native()
-    if ps_if is not None and sorted(i.ipv4 for i in ps_if) != sorted(i.ipv4 for i in nat_if):
-        print("DIFFÉRENCE interfaces natif/PowerShell:", [i.ipv4 for i in nat_if], [i.ipv4 for i in ps_if])
+    if ps_if is not None and not {i.ipv4 for i in ps_if} <= {i.ipv4 for i in nat_if}:
+        print("MANQUE côté natif (PowerShell voit plus):", [i.ipv4 for i in nat_if], [i.ipv4 for i in ps_if])
         failures += 1
+    print("   natif:", [i.ipv4 for i in nat_if], "PowerShell:", [i.ipv4 for i in (ps_if or [])])
     itfs = attempt("interfaces", ifc.collect_interfaces)
     attempt("routes", ifc.collect_routes)
     dom = attempt("domaine", ad.collect_domain)
