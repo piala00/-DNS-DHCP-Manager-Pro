@@ -22,7 +22,7 @@ from ..planning import planner as P
 from ..reports import export as rx
 from . import theme
 from .tables import FilterProxy, TableModel
-from .worker import AnalysisWorker, DetectWorker, VerifyWorker
+from .worker import AnalysisWorker, ConnectivityWorker, DetectWorker, VerifyWorker
 
 _log = logging.getLogger("gtc_ipm")
 TAB_NAMES = ["Accueil", "Machines du domaine", "Équipements du réseau", "Plan d'adressage",
@@ -128,12 +128,12 @@ class MainWindow(QMainWindow):
         grid = QGridLayout()
         self.kpis: dict[str, QLabel] = {}
         titles = ["Domaine détecté", "Contrôleur(s) de domaine", "Serveur(s) DNS", "Serveur(s) DHCP",
-                  "Sous-réseaux locaux", "Machines AD", "Machines AD actives", "IP occupées",
-                  "Adresses candidates", "Conflits"]
+                  "Sous-réseaux locaux", "Accès Internet", "Machines AD", "Machines AD actives",
+                  "IP occupées", "Adresses candidates", "Conflits"]
         for i, t in enumerate(titles):
             f, v = _kpi(t)
             self.kpis[t] = v
-            grid.addWidget(f, i // 5, i % 5)
+            grid.addWidget(f, i // 6, i % 6)
         lay.addLayout(grid)
 
         box = QHBoxLayout()
@@ -146,7 +146,7 @@ class MainWindow(QMainWindow):
         left.addWidget(self.net_list)
         add = QHBoxLayout()
         self.net_add = QLineEdit()
-        self.net_add.setPlaceholderText("Ajouter un réseau CIDR, ex. 172.168.4.0/24")
+        self.net_add.setPlaceholderText("Ajouter un réseau CIDR, ex. 192.168.10.0/24")
         self.net_add.returnPressed.connect(self.add_network)
         b = QPushButton("Ajouter")
         b.clicked.connect(self.add_network)
@@ -347,6 +347,11 @@ class MainWindow(QMainWindow):
         dh = sorted({*snap.dhcp.servers, *(i.dhcp_server for i in snap.interfaces if i.dhcp_server)})
         k["Serveur(s) DHCP"].setText(", ".join(dh) or "—")
         k["Sous-réseaux locaux"].setText(", ".join(snap.local_networks) or "—")
+        if snap.internet:
+            ok = [p for p in snap.internet if p.internet_ok]
+            k["Accès Internet"].setText(f"OUI via {ok[0].gateway}" if ok else "NON détecté")
+        else:
+            k["Accès Internet"].setText("—")
         k["Machines AD"].setText(str(len(snap.ad_computers)) if snap.ad_computers else "non lu")
         active = sum(1 for c in snap.ad_computers if c.verification.startswith("Active"))
         k["Machines AD actives"].setText(str(active) if snap.ad_computers else "—")
@@ -497,6 +502,10 @@ class MainWindow(QMainWindow):
         row.addWidget(self.verify_ip_edit, 1)
         row.addWidget(self.btn_verify)
         row.addWidget(self.btn_cfg)
+        self.btn_conn = QPushButton("Tester la connectivité")
+        self.btn_conn.setToolTip("Passerelle, Internet par IP, DNS du domaine et DNS externe : indique l'étape qui échoue.")
+        self.btn_conn.clicked.connect(self.test_connectivity)
+        row.addWidget(self.btn_conn)
         rw = QWidget()
         rl = QVBoxLayout(rw)
         rl.setContentsMargins(0, 0, 0, 0)
@@ -555,6 +564,17 @@ class MainWindow(QMainWindow):
         self.last_verify = res
         self.verify_out.setPlainText(res.text())
         self.btn_verify.setEnabled(True)
+
+    def test_connectivity(self) -> None:
+        if getattr(self, "conn_worker", None) and self.conn_worker.isRunning():
+            return
+        dom = self.snapshot.domain if self.snapshot else None
+        self.verify_out.setPlainText("Test de connectivité en cours…")
+        self.btn_conn.setEnabled(False)
+        self.conn_worker = ConnectivityWorker(self.collectors, dom.name if dom else "",
+                                              dom.dc_addresses if dom else [], self)
+        self.conn_worker.done.connect(lambda t: (self.verify_out.setPlainText(t), self.btn_conn.setEnabled(True)))
+        self.conn_worker.start()
 
     def config_sheet_text(self) -> str:
         e = self.selected_candidate()
@@ -736,7 +756,7 @@ class MainWindow(QMainWindow):
         super().keyPressEvent(e)
 
     def closeEvent(self, e) -> None:
-        for wk in (self.worker, self.detector, self.verifier):
+        for wk in (self.worker, self.detector, self.verifier, getattr(self, "conn_worker", None)):
             if wk and wk.isRunning():
                 if hasattr(wk, "cancel"):
                     wk.cancel()

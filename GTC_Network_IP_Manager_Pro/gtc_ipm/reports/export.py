@@ -8,6 +8,7 @@ import re
 from pathlib import Path
 from typing import Iterable
 
+from ..core import internet as inet
 from ..core.models import IpEntry, Snapshot, __version__
 
 TABLES = ["Machines AD", "Réseau", "DHCP", "Plan", "Conflits", "Diagnostic", "Sources"]
@@ -56,6 +57,9 @@ def tables(snap: Snapshot) -> dict[str, tuple[list[str], list[list]]]:
                                             "(hors domaine)" if not snap.domain.in_domain else "?")],
             ["Contrôleurs (adresses)", ", ".join(snap.domain.dc_addresses)]]
     diag += [["Constat domaine", x] for x in snap.domain.evidence]
+    diag += [["Voie Internet", f"{p.interface} {p.ipv4} via {p.gateway} : "
+              f"{'OK' if p.internet_ok else 'ÉCHEC'} — {p.detail}"] for p in snap.internet]
+    diag += [["Passerelle probable", x] for x in snap.gateway_candidates]
     diag += [["Avertissement", w] for w in snap.warnings]
     diag += [["Erreur DHCP", e] for e in snap.dhcp.errors]
     diag += [["Réseaux sondés", n] for n in snap.scanned_networks]
@@ -136,6 +140,9 @@ def config_sheet(entry: IpEntry, snap: Snapshot, hostname: str = "<NOM-DU-PC>") 
         "",
         f"Statut de l'adresse : {entry.status}",
         f"Justification : {entry.justification}",
+        "",
+        "ACCÈS INTERNET",
+        *["  " + x for x in inet.internet_plan(entry.network, snap.internet, dns_list)],
         "",
         "Contrôles avant affectation :",
         "  [ ] Revalider l'adresse (bouton « Vérifier l'adresse »).",

@@ -226,7 +226,8 @@ def fake_collectors(dhcp_fail=False, ad_fail=False, dns_unavailable=False):
         resolve_a=a_fn,
         resolve_ptr=lambda ip: ((resolver.RESOLVED, "pc-ok.gtc.local") if ip == "192.168.1.20"
                                 else (resolver.ABSENT, "")),
-        tcp_check=lambda h, p, timeout=2.0: True)
+        tcp_check=lambda h, p, timeout=2.0: True,
+        tcp_from=lambda src, h, p, timeout=3.0: True)
 
 
 def opts(**kw):
@@ -325,7 +326,7 @@ def test_settings_roundtrip_and_clamp(tmp_path):
     s = Settings(max_hosts=999999, concurrency=0)
     s.save(p)
     s2 = Settings.load(p)
-    assert s2.max_hosts == 4096 and s2.concurrency == 1 and s2.dc_hints == ["172.168.4.254"]
+    assert s2.max_hosts == 4096 and s2.concurrency == 1 and s2.dc_hints == []
     assert Settings.load(tmp_path / "missing.json").max_hosts == 1024
 
 
@@ -363,7 +364,8 @@ def test_domain_detection_failure_is_not_reported_as_workgroup():
     snap = orch.run_analysis(opts(), col, threading.Event())
     assert called == [False]
     assert not snap.domain.detected and any("n'est pas déclaré" in e for e in snap.domain.evidence)
-    assert snap.sources[1].state == SRC_UNAVAILABLE and "Délai" in snap.sources[1].detail
+    dom = next(x for x in snap.sources if x.name.startswith("Domaine"))
+    assert dom.state == SRC_UNAVAILABLE and "Délai" in dom.detail
 
 
 def test_real_workgroup_message_only_when_detected():
@@ -405,3 +407,66 @@ def test_config_sheet_uses_domain_dns_and_warns_about_public_dns():
     assert "DNS à configurer  : 172.168.4.245" in t and "8.8.8.8" in t and "ATTENTION" in t
     snap.interfaces[0].dns_servers = ["172.168.4.245"]
     assert "ATTENTION" not in config_sheet(e, snap)
+
+
+# --- voie Internet / connectivité ---------------------------------------------------
+from gtc_ipm.core import internet as inet  # noqa: E402
+
+
+def test_internet_path_detected_from_orchestrator():
+    snap = orch.run_analysis(opts(), fake_collectors(), threading.Event())
+    assert len(snap.internet) == 1 and snap.internet[0].internet_ok and snap.internet[0].gateway == "192.168.1.1"
+    assert any("192.168.1.1" in c for c in snap.gateway_candidates)
+
+
+def test_no_internet_is_reported_not_assumed():
+    col = fake_collectors()
+    col.tcp_from = lambda *a, **k: False
+    snap = orch.run_analysis(opts(), col, threading.Event())
+    src = next(x for x in snap.sources if x.name.startswith("Accès Internet"))
+    assert src.state == SRC_PARTIAL and not snap.internet[0].internet_ok
+
+
+def test_dns_packet_roundtrip():
+    q = inet.build_dns_query("www.google.com", 0x1234)
+    assert q[:2] == b"\x12\x34" and q.endswith(b"\x00\x01\x00\x01")
+    resp = (b"\x12\x34\x81\x80\x00\x01\x00\x01\x00\x00\x00\x00" + q[12:] +
+            b"\xc0\x0c\x00\x01\x00\x01\x00\x00\x00\x3c\x00\x04\x8e\xfa\xb8\x64")
+    assert inet.parse_dns_answer(resp, 0x1234) == ("ok", ["142.250.184.100"])
+    assert inet.parse_dns_answer(resp, 0x9999)[0] == "invalide"
+    nx = b"\x12\x34\x81\x83\x00\x01\x00\x00\x00\x00\x00\x00" + q[12:]
+    assert inet.parse_dns_answer(nx, 0x1234)[0] == "nxdomain"
+
+
+def test_connectivity_report_pinpoints_dns_vs_gateway():
+    itf = Interface("Eth", "192.168.1.151", 24, "", "192.168.1.1", ["10.9.9.9"], True, "192.168.1.1")
+    r = "\n".join(inet.connectivity_report([itf], "corp.lan", tcp=lambda *a, **k: True,
+                                            lookup=lambda s, n, t=3.0: ("sans réponse", []), ping=lambda i, t: True))
+    assert "Internet : OK" in r and "sans réponse" in r and "DNS" in r.split("CONCLUSION")[1]
+    bad = Interface("Eth", "172.168.4.10", 24, "", "192.168.1.1", [])
+    r2 = "\n".join(inet.connectivity_report([bad], tcp=lambda *a, **k: False, lookup=lambda *a, **k: ("ok", [])))
+    assert "pas dans le sous-réseau" in r2 and "aucune carte n'atteint Internet" in r2
+
+
+def test_internet_plan_adapts_to_any_site():
+    # Site A : la box est dans un autre sous-réseau que le réseau cible
+    p = inet.InternetPath("Eth", "192.168.1.151", "192.168.1.0/24", "192.168.1.1", True, "192.168.1.1",
+                          internet_ok=True)
+    t = "\n".join(inet.internet_plan("172.168.4.0/24", [p], ["172.168.4.245"]))
+    assert "PAS dans 172.168.4.0/24" in t and "netsh interface ip add address" in t and "255.255.255.0" in t
+    # Site B (autre FAI, autre plage) : la box est dans le réseau cible
+    p2 = inet.InternetPath("Eth", "10.20.0.5", "10.20.0.0/24", "10.20.0.254", False, "", internet_ok=True)
+    t2 = "\n".join(inet.internet_plan("10.20.0.0/24", [p2], ["10.20.0.2"]))
+    assert "utilisez-la comme passerelle" in t2 and "netsh" not in t2
+    assert "aucune passerelle Internet" in "\n".join(inet.internet_plan("10.20.0.0/24", [], []))
+
+
+def test_config_sheet_contains_internet_section():
+    from gtc_ipm.core.models import IpEntry, Snapshot
+    from gtc_ipm.reports.export import config_sheet
+    snap = Snapshot(interfaces=[Interface("Eth", "192.168.1.151", 24, "", "192.168.1.1", ["172.168.4.245"], True)],
+                    internet=[inet.InternetPath("Eth", "192.168.1.151", "192.168.1.0/24", "192.168.1.1", True, "",
+                                                internet_ok=True)],
+                    domain=DomainInfo(True, "x.lan", [], ["172.168.4.245"]))
+    t = config_sheet(IpEntry("172.168.4.10", "CANDIDATE_À_VÉRIFIER", "x", "172.168.4.0/24", "NOW"), snap)
+    assert "ACCÈS INTERNET" in t and "192.168.1.1" in t

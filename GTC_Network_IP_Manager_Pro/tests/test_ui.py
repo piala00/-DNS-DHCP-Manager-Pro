@@ -106,6 +106,11 @@ def test_full_workflow(app, tmp_path):
     w.verify_ip_edit.setText("pas une ip")
     click(w.btn_verify)
     assert "valide" in w.verify_out.toPlainText()
+    # Voie Internet + test de connectivité
+    assert w.kpis["Accès Internet"].text() == "OUI via 192.168.1.1"
+    click(w.btn_conn)
+    wait(app, lambda: "CONCLUSION" in w.verify_out.toPlainText())
+    assert "Internet : OK" in w.verify_out.toPlainText()
     # Exports
     assert w.btn_xlsx.isEnabled()
     x = tmp_path / "plan.xlsx"
@@ -151,7 +156,7 @@ def test_source_errors_are_visible_not_fatal(app):
     txt = w.warn_box.toPlainText()
     assert "INACCESSIBLE" in txt and "simulé" in txt
     assert w.kpis["Machines AD"].text() == "non lu"
-    assert w.src_model.rowCount() == 6
+    assert w.src_model.rowCount() == 7
     w.close()
 
 

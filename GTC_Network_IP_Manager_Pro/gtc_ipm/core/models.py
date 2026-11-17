@@ -182,5 +182,7 @@ class Snapshot:
     ptr: dict[str, str] = field(default_factory=dict)  # IP -> nom PTR
     dns_ok: dict[str, bool] = field(default_factory=dict)  # réseau -> DNS a répondu
     local_networks: list[str] = field(default_factory=list)
+    internet: list = field(default_factory=list)  # InternetPath détectés
+    gateway_candidates: list[str] = field(default_factory=list)  # équipements passerelle probables
     log: list[str] = field(default_factory=list)
     cancelled: bool = False

@@ -7,6 +7,7 @@ import traceback
 from PySide6.QtCore import QThread, Signal
 
 from ..core import orchestrator as orch
+from ..core import internet as inet
 from ..core.verify import verify_ip
 
 _log = logging.getLogger("gtc_ipm")
@@ -65,3 +66,20 @@ class VerifyWorker(QThread):
             self.done.emit(verify_ip(ip, col, t, st, why))
         except Exception as e:  # noqa: BLE001
             self.failed.emit(f"{type(e).__name__}: {e}")
+
+
+class ConnectivityWorker(QThread):
+    done = Signal(str)
+
+    def __init__(self, collectors, domain_name="", dc_ips=None, parent=None):
+        super().__init__(parent)
+        self.collectors, self.domain_name, self.dc_ips = collectors, domain_name, dc_ips or []
+
+    def run(self) -> None:
+        try:
+            itfs = self.collectors.interfaces()  # relu à chaque test : reflète la configuration actuelle
+            lines = inet.connectivity_report(itfs, self.domain_name, self.dc_ips, self.collectors.tcp_from,
+                                             inet.dns_lookup, self.collectors.ping)
+            self.done.emit("\n".join(lines))
+        except Exception as e:  # noqa: BLE001
+            self.done.emit(f"Test impossible : {type(e).__name__}: {e}")

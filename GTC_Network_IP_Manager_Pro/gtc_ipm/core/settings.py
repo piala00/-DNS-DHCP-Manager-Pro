@@ -16,9 +16,10 @@ def app_dir() -> Path:
 
 @dataclass
 class Settings:
-    # Indications de l'utilisateur : des HYPOTHÈSES, vérifiées à l'analyse.
-    dc_hints: list[str] = field(default_factory=lambda: ["172.168.4.254"])
-    dns_hints: list[str] = field(default_factory=lambda: ["172.168.4.245"])
+    # Indications facultatives de l'utilisateur : des HYPOTHÈSES, vérifiées à l'analyse.
+    # Aucune valeur propre à un site n'est codée : tout est détecté sur le réseau où tourne le logiciel.
+    dc_hints: list[str] = field(default_factory=list)
+    dns_hints: list[str] = field(default_factory=list)
     extra_networks: list[str] = field(default_factory=list)  # CIDR ajoutés par l'utilisateur
     static_inventory: dict[str, str] = field(default_factory=dict)  # IP -> libellé
     user_excluded: list[list[str]] = field(default_factory=list)  # [[début, fin], ...]

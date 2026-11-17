@@ -15,6 +15,7 @@ from ..discovery import interfaces as ifc
 from ..discovery import scan
 from ..dns import resolver
 from ..planning import planner as P
+from . import internet as inet
 from ..planning.evidence import collect_evidence
 from .models import (CONFLIT, SRC_CANCELLED, SRC_OK, SRC_PARTIAL, SRC_SKIPPED,
                      SRC_UNAVAILABLE, AdComputer, DomainInfo, Evidence, Snapshot, SourceStatus,
@@ -38,6 +39,7 @@ class Collectors:
     resolve_a: Callable = resolver.resolve_a
     resolve_ptr: Callable = resolver.resolve_ptr
     tcp_check: Callable = ad.tcp_check
+    tcp_from: Callable = inet.tcp_from
 
 
 @dataclass
@@ -104,6 +106,22 @@ def run_analysis(opts: Options, col: Collectors, cancel: threading.Event,
             s.state, s.detail = SRC_PARTIAL, f"Routes illisibles : {e}"
 
     step("Interfaces et routes locales", s_interfaces, 3)
+
+    # 1b. Voie Internet (passerelle du fournisseur) : détectée, jamais supposée -----------
+    def s_internet(s: SourceStatus) -> None:
+        if not snap.interfaces:
+            s.state, s.detail = SRC_SKIPPED, "Aucune interface."
+            return
+        snap.internet = inet.detect_internet_paths(snap.interfaces, col.tcp_from)
+        snap.gateway_candidates = inet.candidate_gateways(snap.interfaces, snap.routes, col.ping,
+                                                          st.ping_timeout_ms)
+        s.count = sum(1 for p in snap.internet if p.internet_ok)
+        if not s.count:
+            s.state = SRC_PARTIAL
+            s.detail = "Aucune carte n'atteint Internet (TCP sortant). " + " ".join(
+                p.detail for p in snap.internet[:2])
+
+    step("Accès Internet (passerelle du fournisseur)", s_internet, 5)
 
     # 2. Domaine ---------------------------------------------------------------
     def s_domain(s: SourceStatus) -> None:
