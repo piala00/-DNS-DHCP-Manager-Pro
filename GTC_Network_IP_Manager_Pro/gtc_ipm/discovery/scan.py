@@ -71,17 +71,18 @@ def parse_arp_a(text: str) -> dict[str, tuple[str, str]]:
 
 
 def read_neighbors() -> dict[str, tuple[str, str]]:
-    try:
-        return parse_neighbors(json.dumps(ps_json(SCRIPT_NEIGHBORS, timeout=30)))
-    except SourceUnavailable:
-        if not IS_WINDOWS:
-            raise
+    """`arp -a` d'abord (natif, rapide) ; Get-NetNeighbor en repli."""
     try:
         p = subprocess.run(["arp", "-a"], capture_output=True, timeout=15, creationflags=_flags(),
                            stdin=subprocess.DEVNULL)
-        return parse_arp_a(p.stdout.decode("utf-8", errors="replace"))
-    except (OSError, subprocess.TimeoutExpired) as e:
-        raise SourceUnavailable(f"Table ARP illisible : {e}") from e
+        found = parse_arp_a(p.stdout.decode("cp850", errors="replace"))
+        if found:
+            return found
+    except (OSError, subprocess.TimeoutExpired):
+        pass
+    if not IS_WINDOWS:
+        raise SourceUnavailable("Table ARP illisible.")
+    return parse_neighbors(json.dumps(ps_json(SCRIPT_NEIGHBORS, timeout=30)))
 
 
 def sweep(network: ipaddress.IPv4Network, ping: Callable[[str, int], bool],

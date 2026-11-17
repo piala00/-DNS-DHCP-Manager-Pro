@@ -222,8 +222,10 @@ class MainWindow(QMainWindow):
             self._add_item(c, checked=False)
         self.net_list.blockSignals(False)
         if err:
-            self.progress_label.setText(f"Détection automatique indisponible : {err}. "
-                                        "Vous pouvez ajouter les réseaux à la main.")
+            msg = (f"Détection automatique des réseaux impossible : {err}. "
+                   "Ajoutez les réseaux à la main (champ CIDR) puis lancez l'analyse.")
+            self.progress_label.setText(msg)
+            self.warn_box.setPlainText(msg)
         elif not ifs:
             self.progress_label.setText("Aucune interface IPv4 valide détectée.")
         self._update_net_warnings()

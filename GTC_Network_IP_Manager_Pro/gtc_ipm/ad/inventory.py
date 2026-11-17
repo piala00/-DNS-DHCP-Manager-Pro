@@ -111,11 +111,22 @@ def parse_srv(text: str) -> list[str]:
 
 
 def collect_domain() -> DomainInfo:
-    info = parse_domain(json.dumps(ps_json(SCRIPT_DOMAIN, timeout=45)))
+    """Détection native (instantanée) puis complément SRV par PowerShell (non bloquant)."""
+    from ..core import winnet
+    info = None
+    try:
+        info = winnet.detect_domain_native(tcp_check)
+    except Exception as e:  # noqa: BLE001
+        native_err = str(e)
+    if info is None:
+        info = parse_domain(json.dumps(ps_json(SCRIPT_DOMAIN, timeout=90)))
+        info.evidence.append(f"Détection native indisponible ({native_err}) : repli PowerShell.")
     if info.in_domain and "." in info.name:
         try:
-            targets = parse_srv(json.dumps(ps_json(SCRIPT_SRV, {"DOMAIN": valid_host(info.name)}, 45)))
-            info.domain_controllers = targets
+            targets = parse_srv(json.dumps(ps_json(SCRIPT_SRV, {"DOMAIN": valid_host(info.name)}, 25)))
+            for t in targets:
+                if t not in info.domain_controllers:
+                    info.domain_controllers.append(t)
             info.evidence.append(f"SRV _ldap._tcp.dc._msdcs.{info.name} : {len(targets)} contrôleur(s).")
             for t in targets:
                 try:
@@ -126,12 +137,12 @@ def collect_domain() -> DomainInfo:
                 except OSError:
                     info.evidence.append(f"Le contrôleur {t} ne se résout pas en IPv4.")
         except SourceUnavailable as e:
-            info.evidence.append(f"Requête SRV impossible : {e}")
+            info.evidence.append(f"Requête SRV non réalisée (complément facultatif) : {e}")
     return info
 
 
 def collect_ad_computers(domain: DomainInfo, server: Optional[str] = None) -> list[AdComputer]:
-    if not domain.in_domain:
+    if not domain.in_domain and domain.detected:
         raise SourceUnavailable("Poste hors domaine : inventaire AD non réalisé "
                                 "(aucun identifiant n'est demandé par l'application).")
     return parse_ad_computers(json.dumps(ps_json(SCRIPT_AD_COMPUTERS, timeout=150)), domain.name)

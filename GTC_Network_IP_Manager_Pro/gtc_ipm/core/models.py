@@ -64,6 +64,7 @@ class DomainInfo:
     domain_controllers: list[str] = field(default_factory=list)  # noms ou IP
     dc_addresses: list[str] = field(default_factory=list)
     evidence: list[str] = field(default_factory=list)
+    detected: bool = True  # False : détection impossible (≠ poste hors domaine)
 
 
 @dataclass

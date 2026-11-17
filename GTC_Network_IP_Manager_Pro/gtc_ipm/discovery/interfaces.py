@@ -80,7 +80,13 @@ def parse_routes(text: str) -> list[Route]:
 
 
 def collect_interfaces() -> list[Interface]:
-    return parse_interfaces_from(ps_json(SCRIPT_INTERFACES, timeout=45))
+    """API Windows natives d'abord (rapides) ; PowerShell en repli."""
+    from ..core import winnet
+    try:
+        return winnet.collect_interfaces_native()
+    except Exception:  # noqa: BLE001
+        pass
+    return parse_interfaces_from(ps_json(SCRIPT_INTERFACES, timeout=60))
 
 
 def parse_interfaces_from(items: list[dict]) -> list[Interface]:
@@ -90,4 +96,11 @@ def parse_interfaces_from(items: list[dict]) -> list[Interface]:
 
 def collect_routes() -> list[Route]:
     import json
-    return parse_routes(json.dumps(ps_json(SCRIPT_ROUTES, timeout=45)))
+    from ..core import winnet
+    try:
+        routes = winnet.collect_routes_native()
+        if routes:
+            return routes
+    except Exception:  # noqa: BLE001
+        pass
+    return parse_routes(json.dumps(ps_json(SCRIPT_ROUTES, timeout=60)))

@@ -17,7 +17,7 @@ from ..dns import resolver
 from ..planning import planner as P
 from ..planning.evidence import collect_evidence
 from .models import (CONFLIT, SRC_CANCELLED, SRC_OK, SRC_PARTIAL, SRC_SKIPPED,
-                     SRC_UNAVAILABLE, AdComputer, Evidence, Snapshot, SourceStatus,
+                     SRC_UNAVAILABLE, AdComputer, DomainInfo, Evidence, Snapshot, SourceStatus,
                      now_iso)
 from .psrunner import SourceUnavailable
 from .settings import Settings
@@ -107,6 +107,7 @@ def run_analysis(opts: Options, col: Collectors, cancel: threading.Event,
 
     # 2. Domaine ---------------------------------------------------------------
     def s_domain(s: SourceStatus) -> None:
+        snap.domain = DomainInfo(detected=False)
         snap.domain = col.domain()
         for hint in st.dc_hints:
             if cancel.is_set():
@@ -133,6 +134,9 @@ def run_analysis(opts: Options, col: Collectors, cancel: threading.Event,
             s.state, s.detail = SRC_PARTIAL, "; ".join(snap.domain.evidence[:1])
 
     step("Domaine Active Directory", s_domain, 8)
+    if not snap.domain.detected and not snap.domain.evidence:
+        snap.domain.evidence.append("Détection du domaine impossible (voir état de la source) : "
+                                    "le poste n'est pas déclaré « hors domaine ».")
 
     # 3. Inventaire AD + 4. DNS ---------------------------------------------------
     def s_ad(s: SourceStatus) -> None:

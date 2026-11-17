@@ -327,3 +327,54 @@ def test_settings_roundtrip_and_clamp(tmp_path):
     s2 = Settings.load(p)
     assert s2.max_hosts == 4096 and s2.concurrency == 1 and s2.dc_hints == ["172.168.4.254"]
     assert Settings.load(tmp_path / "missing.json").max_hosts == 1024
+
+
+# --- détection native / régressions issues d'un poste réel --------------------
+ROUTE_FR = """===========================================================================
+Table de routage IPv4
+===========================================================================
+Itinéraires actifs :
+Destination réseau    Masque réseau  Adr. passerelle   Adr. interface Métrique
+          0.0.0.0          0.0.0.0     172.168.4.1    172.168.4.50     25
+        127.0.0.0        255.0.0.0         On-link         127.0.0.1    331
+     172.168.4.0    255.255.255.0         On-link     172.168.4.50    281
+   192.168.1.0    255.255.255.0     172.168.4.254    172.168.4.50     26
+        224.0.0.0        240.0.0.0         On-link     172.168.4.50    281
+  255.255.255.255  255.255.255.255         On-link     172.168.4.50    281
+"""
+
+
+def test_parse_route_print_locale_independent():
+    from gtc_ipm.core.winnet import parse_route_print
+    r = {x.destination: x for x in parse_route_print(ROUTE_FR)}
+    assert set(r) == {"0.0.0.0/0", "172.168.4.0/24", "192.168.1.0/24"}
+    assert r["0.0.0.0/0"].next_hop == "172.168.4.1" and r["172.168.4.0/24"].next_hop == ""
+
+
+def test_domain_detection_failure_is_not_reported_as_workgroup():
+    col = fake_collectors()
+
+    def boom():
+        raise SourceUnavailable("Délai dépassé (45 s).")
+    col.domain = boom
+    # ad_computers réel : domaine non détecté => on tente quand même l'AD, sans dire « hors domaine »
+    called = []
+    col.ad_computers = lambda d, server=None: called.append(d.detected) or []
+    snap = orch.run_analysis(opts(), col, threading.Event())
+    assert called == [False]
+    assert not snap.domain.detected and any("n'est pas déclaré" in e for e in snap.domain.evidence)
+    assert snap.sources[1].state == SRC_UNAVAILABLE and "Délai" in snap.sources[1].detail
+
+
+def test_real_workgroup_message_only_when_detected():
+    with pytest.raises(SourceUnavailable, match="hors domaine"):
+        ad.collect_ad_computers(DomainInfo(in_domain=False, detected=True))
+
+
+def test_native_functions_refuse_cleanly_off_windows():
+    from gtc_ipm.core import winnet
+    if winnet.IS_WINDOWS:
+        pytest.skip("Windows")
+    for fn in (winnet.collect_interfaces_native, winnet.collect_routes_native, winnet.join_status):
+        with pytest.raises(SourceUnavailable):
+            fn()
