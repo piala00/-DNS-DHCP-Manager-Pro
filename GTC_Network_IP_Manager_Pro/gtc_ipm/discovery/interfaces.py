@@ -50,7 +50,7 @@ def parse_interfaces(text: str) -> list[Interface]:
         ips = [_v4(x) for x in as_list(d.get("IPAddress"))]
         masks = as_list(d.get("IPSubnet"))
         gws = [g for g in (_v4(x) for x in as_list(d.get("Gateway"))) if g]
-        dns = [x for x in (_v4(y) for y in as_list(d.get("Dns"))) if x]
+        dns = list(dict.fromkeys(x for x in (_v4(y) for y in as_list(d.get("Dns"))) if x))
         for i, ip in enumerate(ips):
             if not ip or ip.startswith("169.254."):
                 continue

@@ -52,7 +52,8 @@ def tables(snap: Snapshot) -> dict[str, tuple[list[str], list[list]]]:
     diag = [["Application", f"GTC Network IP Manager Pro {__version__}"],
             ["Début", snap.started_at], ["Fin", snap.finished_at],
             ["Annulée", "oui" if snap.cancelled else "non"],
-            ["Domaine", snap.domain.name or ("(hors domaine)" if not snap.domain.in_domain else "?")],
+            ["Domaine", snap.domain.name or ("(détection impossible)" if not snap.domain.detected else
+                                            "(hors domaine)" if not snap.domain.in_domain else "?")],
             ["Contrôleurs (adresses)", ", ".join(snap.domain.dc_addresses)]]
     diag += [["Constat domaine", x] for x in snap.domain.evidence]
     diag += [["Avertissement", w] for w in snap.warnings]

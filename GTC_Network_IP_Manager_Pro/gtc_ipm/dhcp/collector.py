@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import ipaddress
 import json
+import socket
 
 from ..core.models import DhcpData, DhcpLease, DhcpScope
 from ..core.psrunner import SourceUnavailable, as_list, parse_json_list, ps_json, valid_host
@@ -78,6 +79,14 @@ def parse_server_scopes(server: str, text: str, data: DhcpData) -> None:
             data.queried_scopes.add(f"{server}|{sid}")
 
 
+def _rpc_reachable(host: str, timeout: float = 3.0) -> bool:
+    try:
+        with socket.create_connection((host, 135), timeout=timeout):
+            return True
+    except OSError:
+        return False
+
+
 def collect_dhcp(extra_servers: list[str]) -> DhcpData:
     data = DhcpData()
     servers: list[str] = []
@@ -93,13 +102,19 @@ def collect_dhcp(extra_servers: list[str]) -> DhcpData:
         raise SourceUnavailable("Aucun serveur DHCP identifié. " + " ".join(data.errors))
     ok = 0
     for srv in servers:
+        # Un serveur DHCP Windows répond en RPC (TCP 135). Sinon (box, routeur, Linux) la
+        # lecture administrative est impossible : inutile d'attendre un long délai.
+        if not _rpc_reachable(srv):
+            data.errors.append(f"{srv} : port RPC 135 injoignable — ce n'est probablement pas un serveur "
+                               "DHCP Windows (routeur/box ?) ou le pare-feu bloque l'administration.")
+            continue
         try:
             host = srv
             try:
                 host = str(ipaddress.IPv4Address(srv))
             except ValueError:
                 host = valid_host(srv)
-            parse_server_scopes(srv, json.dumps(ps_json(SCRIPT_DHCP_SERVER, {"SERVER": host}, 180)), data)
+            parse_server_scopes(srv, json.dumps(ps_json(SCRIPT_DHCP_SERVER, {"SERVER": host}, 120)), data)
             ok += 1
         except (SourceUnavailable, ValueError) as e:
             data.errors.append(f"{srv} : {e}")

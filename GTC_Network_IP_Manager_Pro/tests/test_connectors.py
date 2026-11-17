@@ -378,3 +378,17 @@ def test_native_functions_refuse_cleanly_off_windows():
     for fn in (winnet.collect_interfaces_native, winnet.collect_routes_native, winnet.join_status):
         with pytest.raises(SourceUnavailable):
             fn()
+
+
+def test_duplicate_dns_servers_are_deduplicated():
+    t = json.dumps({"Alias": "Wi-Fi", "IPAddress": ["192.168.1.135"], "IPSubnet": ["255.255.255.0"],
+                    "Dns": ["192.168.1.1", "192.168.1.1"]})
+    assert ifc.parse_interfaces(t)[0].dns_servers == ["192.168.1.1"]
+
+
+def test_dhcp_non_windows_server_skipped_fast(monkeypatch):
+    monkeypatch.setattr(dh, "_rpc_reachable", lambda h, t=3.0: False)
+    monkeypatch.setattr(dh, "ps_json", lambda *a, **k: (_ for _ in ()).throw(SourceUnavailable("x")))
+    with pytest.raises(SourceUnavailable) as e:
+        dh.collect_dhcp(["192.168.1.1"])
+    assert "135" in str(e.value)
