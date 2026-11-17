@@ -43,6 +43,16 @@ jobs:
         shell: pwsh
         run: python tests/windows_smoke.py
 
+      - name: Collect Visual C++ runtime DLLs (app-local deployment)
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force vcrt | Out-Null
+          foreach ($n in 'msvcp140.dll','msvcp140_1.dll','msvcp140_2.dll','vcruntime140.dll','vcruntime140_1.dll','concrt140.dll') {
+            $p = Join-Path $env:SystemRoot "System32\$n"
+            if (Test-Path $p) { Copy-Item $p vcrt/ } else { Write-Host "absent: $n" }
+          }
+          Get-ChildItem vcrt | Select-Object Name, Length
+
       - name: Build standalone EXE
         shell: pwsh
         run: |
@@ -50,6 +60,7 @@ jobs:
             --name GTC_Network_IP_Manager_Pro `
             --version-file version_info.txt `
             --collect-submodules gtc_ipm `
+            --add-binary 'vcrt\*.dll;.' `
             main.py
           if (!(Test-Path dist/GTC_Network_IP_Manager_Pro.exe)) { throw 'EXE missing' }
           $b = [System.IO.File]::ReadAllBytes((Resolve-Path dist/GTC_Network_IP_Manager_Pro.exe))
