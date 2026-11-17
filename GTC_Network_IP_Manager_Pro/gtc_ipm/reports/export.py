@@ -114,8 +114,14 @@ def config_sheet(entry: IpEntry, snap: Snapshot, hostname: str = "<NOM-DU-PC>") 
     net = ipaddress.ip_network(entry.network)
     itf = next((i for i in snap.interfaces if ipaddress.ip_address(i.ipv4) in net), None)
     gw = itf.gateway if itf and itf.gateway else "<à renseigner : passerelle non détectée>"
-    dns = ", ".join(itf.dns_servers) if itf and itf.dns_servers else (
-        ", ".join(snap.domain.dc_addresses) or "<à renseigner : DNS AD>")
+    local_dns = list(itf.dns_servers) if itf else []
+    dcs = list(snap.domain.dc_addresses) if snap.domain.in_domain else []
+    dns_list = dcs or local_dns
+    dns = ", ".join(dns_list) if dns_list else "<à renseigner : DNS AD>"
+    extra = [d for d in local_dns if dcs and d not in dcs]
+    dns_warn = ([f"ATTENTION : ce poste utilise aussi {', '.join(extra)} comme DNS. Sur un poste du domaine, "
+                 "n'indiquez que les DNS du domaine (un DNS public en plus perturbe la résolution AD)."]
+                if extra else [])
     lines = [
         "FICHE DE CONFIGURATION — nouveau poste (à appliquer manuellement)",
         f"Établie le : {entry.checked_at}",
@@ -124,7 +130,8 @@ def config_sheet(entry: IpEntry, snap: Snapshot, hostname: str = "<NOM-DU-PC>") 
         f"Adresse IPv4      : {entry.ip}",
         f"Masque            : {net.netmask} (/{net.prefixlen})",
         f"Passerelle        : {gw}",
-        f"DNS (contrôleurs) : {dns}",
+        f"DNS à configurer  : {dns}",
+        *dns_warn,
         f"Domaine           : {snap.domain.name or '<non détecté>'}",
         "",
         f"Statut de l'adresse : {entry.status}",

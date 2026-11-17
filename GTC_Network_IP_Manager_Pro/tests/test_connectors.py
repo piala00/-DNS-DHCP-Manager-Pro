@@ -392,3 +392,16 @@ def test_dhcp_non_windows_server_skipped_fast(monkeypatch):
     with pytest.raises(SourceUnavailable) as e:
         dh.collect_dhcp(["192.168.1.1"])
     assert "135" in str(e.value)
+
+
+def test_config_sheet_uses_domain_dns_and_warns_about_public_dns():
+    from gtc_ipm.core.models import IpEntry, Snapshot
+    from gtc_ipm.reports.export import config_sheet
+    snap = Snapshot(interfaces=[Interface("Eth", "172.168.4.18", 24, "", "172.168.4.45",
+                                          ["172.168.4.245", "8.8.8.8"])],
+                    domain=DomainInfo(True, "gtcagences.lan", [], ["172.168.4.245"]))
+    e = IpEntry("172.168.4.10", "CANDIDATE_À_VÉRIFIER", "x", "172.168.4.0/24", "NOW")
+    t = config_sheet(e, snap)
+    assert "DNS à configurer  : 172.168.4.245" in t and "8.8.8.8" in t and "ATTENTION" in t
+    snap.interfaces[0].dns_servers = ["172.168.4.245"]
+    assert "ATTENTION" not in config_sheet(e, snap)
