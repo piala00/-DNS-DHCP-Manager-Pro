@@ -111,13 +111,23 @@ def export_xlsx(snap: Snapshot, path: str | Path) -> None:
     wb.save(path)
 
 
-def config_sheet(entry: IpEntry, snap: Snapshot, hostname: str = "<NOM-DU-PC>") -> str:
+def config_sheet(entry: IpEntry, snap: Snapshot, hostname: str = "<NOM-DU-PC>",
+                 known_internet: dict | None = None) -> str:
     """Fiche de configuration pour un nouveau poste. Texte seulement : l'application
     ne modifie ni l'IP ni l'appartenance au domaine."""
     import ipaddress
     net = ipaddress.ip_network(entry.network)
     itf = next((i for i in snap.interfaces if ipaddress.ip_address(i.ipv4) in net), None)
-    gw = itf.gateway if itf and itf.gateway else "<à renseigner : passerelle non détectée>"
+    paths = list(snap.internet) + [p for p in inet.remembered_as_paths(known_internet or {})
+                                   if not any(q.gateway == p.gateway and q.internet_ok for q in snap.internet)]
+    best = inet.best_gateway_for(entry.network, paths)
+    if best:
+        gw = best.gateway + ("  (passerelle Internet détectée)" if best in snap.internet
+                             else "  (passerelle Internet mémorisée)")
+    elif itf and itf.gateway and ipaddress.ip_address(itf.gateway) in net:
+        gw = itf.gateway + "  (NON confirmée comme accès Internet : testez-la)"
+    else:
+        gw = "<voir ACCÈS INTERNET ci-dessous : aucune passerelle Internet dans ce réseau>"
     local_dns = list(itf.dns_servers) if itf else []
     dcs = list(snap.domain.dc_addresses) if snap.domain.in_domain else []
     dns_list = dcs or local_dns
@@ -142,7 +152,7 @@ def config_sheet(entry: IpEntry, snap: Snapshot, hostname: str = "<NOM-DU-PC>") 
         f"Justification : {entry.justification}",
         "",
         "ACCÈS INTERNET",
-        *["  " + x for x in inet.internet_plan(entry.network, snap.internet, dns_list)],
+        *["  " + x for x in inet.internet_plan(entry.network, paths, dns_list)],
         "",
         "Contrôles avant affectation :",
         "  [ ] Revalider l'adresse (bouton « Vérifier l'adresse »).",

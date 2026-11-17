@@ -213,3 +213,41 @@ def candidate_gateways(interfaces: list[Interface], routes: list, ping: Callable
         if r.destination == "0.0.0.0/0" and r.next_hop:
             cands.setdefault(r.next_hop, "route par défaut")
     return [f"{ip} ({why}) répond" for ip, why in cands.items() if ping(ip, timeout_ms)]
+
+
+def remember_paths(known: dict, paths: list[InternetPath]) -> bool:
+    """Mémorise les voies Internet qui fonctionnent (utile avant de passer en adresse fixe,
+    quand la configuration DHCP d'origine va disparaître). Retourne True si changement."""
+    changed = False
+    for p in paths:
+        if not p.internet_ok:
+            continue
+        key = f"{p.gateway}@{p.network}"
+        rec = {"gateway": p.gateway, "network": p.network, "interface": p.interface, "dhcp": p.dhcp,
+               "dhcp_server": p.dhcp_server, "dns": list(p.dns_servers), "saved_at": p.checked_at}
+        if known.get(key) != rec:
+            known[key] = rec
+            changed = True
+    return changed
+
+
+def remembered_as_paths(known: dict) -> list[InternetPath]:
+    out = []
+    for rec in known.values():
+        try:
+            out.append(InternetPath(rec["interface"], "", rec["network"], rec["gateway"], bool(rec.get("dhcp")),
+                                    rec.get("dhcp_server", ""), list(rec.get("dns", [])), True,
+                                    f"Passerelle MÉMORISÉE le {rec.get('saved_at', '?')} (elle avait donné accès à "
+                                    "Internet) : à revérifier avec « Tester la connectivité ».", rec.get("saved_at", "")))
+        except KeyError:
+            continue
+    return out
+
+
+def best_gateway_for(target_network: str, paths: list[InternetPath]) -> Optional[InternetPath]:
+    """Passerelle Internet utilisable directement dans target_network (même sous-réseau)."""
+    tnet = ipaddress.ip_network(target_network)
+    for p in paths:
+        if p.internet_ok and ipaddress.ip_address(p.gateway) in tnet:
+            return p
+    return None

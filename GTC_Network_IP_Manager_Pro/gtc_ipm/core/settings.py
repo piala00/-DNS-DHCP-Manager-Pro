@@ -28,6 +28,8 @@ class Settings:
     concurrency: int = 48
     candidate_count: int = 20
     stale_days: int = 90
+    # Passerelles Internet qui ont fonctionné (mémorisées à l'analyse, ex. en DHCP), par passerelle
+    known_internet: dict = field(default_factory=dict)
 
     @classmethod
     def load(cls, path: Path | None = None) -> "Settings":

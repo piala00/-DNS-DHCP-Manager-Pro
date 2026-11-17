@@ -313,6 +313,12 @@ class MainWindow(QMainWindow):
 
     def _on_done(self, snap: Snapshot) -> None:
         self.snapshot = snap
+        try:
+            from ..core import internet as inet
+            if inet.remember_paths(self.settings.known_internet, snap.internet):
+                self.settings.save()
+        except Exception:  # noqa: BLE001 - la mémorisation ne doit jamais gêner l'analyse
+            _log.exception("Mémorisation de la passerelle Internet impossible")
         self.progress_label.setText("Analyse annulée (résultats partiels, plan non calculé)."
                                     if snap.cancelled else "Analyse terminée.")
         self.warn_box.setPlainText("\n".join(snap.warnings + [f"{s.name} : {s.state} — {s.detail}"
@@ -580,7 +586,7 @@ class MainWindow(QMainWindow):
         e = self.selected_candidate()
         if not e or not self.snapshot:
             return ""
-        return rx.config_sheet(e, self.snapshot)
+        return rx.config_sheet(e, self.snapshot, known_internet=self.settings.known_internet)
 
     def show_config_sheet(self) -> None:
         t = self.config_sheet_text()

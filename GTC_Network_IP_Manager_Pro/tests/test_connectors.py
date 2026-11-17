@@ -470,3 +470,32 @@ def test_config_sheet_contains_internet_section():
                     domain=DomainInfo(True, "x.lan", [], ["172.168.4.245"]))
     t = config_sheet(IpEntry("172.168.4.10", "CANDIDATE_À_VÉRIFIER", "x", "172.168.4.0/24", "NOW"), snap)
     assert "ACCÈS INTERNET" in t and "192.168.1.1" in t
+
+
+def test_working_gateway_is_remembered_and_reused_after_switching_to_static():
+    from gtc_ipm.core.models import IpEntry, Snapshot
+    from gtc_ipm.reports.export import config_sheet
+    known: dict = {}
+    # 1) analyse en DHCP : la box donne Internet
+    ok = inet.InternetPath("Eth", "192.168.1.151", "192.168.1.0/24", "192.168.1.1", True, "192.168.1.1",
+                           ["192.168.1.1"], True, "ok", "T1")
+    assert inet.remember_paths(known, [ok]) and not inet.remember_paths(known, [ok])
+    # 2) après passage en fixe : plus d'Internet détecté, mais la passerelle mémorisée est proposée
+    lost = inet.InternetPath("Eth", "192.168.1.200", "192.168.1.0/24", "192.168.1.1", False, "", [], False, "KO", "T2")
+    snap = Snapshot(interfaces=[Interface("Eth", "192.168.1.200", 24, "", "192.168.1.1", [])], internet=[lost])
+    t = config_sheet(IpEntry("192.168.1.50", "CANDIDATE_À_VÉRIFIER", "x", "192.168.1.0/24", "NOW"), snap,
+                     known_internet=known)
+    assert "Passerelle        : 192.168.1.1  (passerelle Internet mémorisée)" in t
+    # une passerelle ayant échoué n'est jamais mémorisée
+    assert not inet.remember_paths({}, [lost])
+
+
+def test_sheet_never_prints_unconfirmed_foreign_gateway_as_valid():
+    from gtc_ipm.core.models import IpEntry, Snapshot
+    from gtc_ipm.reports.export import config_sheet
+    snap = Snapshot(interfaces=[Interface("Eth", "172.168.4.18", 24, "", "172.168.4.45", [])])
+    t = config_sheet(IpEntry("172.168.4.10", "CANDIDATE_À_VÉRIFIER", "x", "172.168.4.0/24", "NOW"), snap)
+    assert "NON confirmée comme accès Internet" in t
+    snap.interfaces[0].gateway = "192.168.1.1"
+    assert "aucune passerelle Internet dans ce réseau" in config_sheet(
+        IpEntry("172.168.4.10", "CANDIDATE_À_VÉRIFIER", "x", "172.168.4.0/24", "NOW"), snap)
