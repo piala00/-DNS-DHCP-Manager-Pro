@@ -171,7 +171,7 @@ def collect_interfaces_native() -> list[Interface]:
             out.append(Interface(alias=desc, ipv4=v, prefix=pre, mac=mac,
                                  gateway=gws[0] if gws else "", dns_servers=list(dns),
                                  dhcp_enabled=bool(node.DhcpEnabled), dhcp_server=dhcp if node.DhcpEnabled else "",
-                                 dns_suffix=suffix))
+                                 dns_suffix=suffix, index=int(node.Index)))
         if not node.Next:
             break
         node = node.Next.contents

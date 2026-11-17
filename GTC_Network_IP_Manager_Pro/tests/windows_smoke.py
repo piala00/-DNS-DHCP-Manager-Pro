@@ -66,6 +66,16 @@ def main() -> int:
         t0 = time.time()
         r = attempt(label, fn)
         print(f"   durée {time.time() - t0:.2f}s ->", r if not isinstance(r, list) else [str(x)[:120] for x in r[:3]])
+    from gtc_ipm.core import netconfig as _nc
+    print("[netconfig] is_admin =", _nc.is_admin())
+    try:                                     # LECTURE SEULE : aucune modification de la carte du runner
+        rc, out = _nc.default_runner(["netsh", "interface", "dump"])
+        print(f"[netconfig] netsh interface dump rc={rc} taille={len(out)}")
+        if rc != 0 or len(out) < 50:
+            failures += 1
+    except Exception as e:  # noqa: BLE001
+        print("[netconfig] ERREUR", e)
+        failures += 1
     t0 = time.time()
     ps_if = attempt("interfaces (PowerShell)", lambda: ifc.parse_interfaces_from(ifc.ps_json(ifc.SCRIPT_INTERFACES, timeout=60)))
     print(f"   durée PowerShell {time.time() - t0:.2f}s")

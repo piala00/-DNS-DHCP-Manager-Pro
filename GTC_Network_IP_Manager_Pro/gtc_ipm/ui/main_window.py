@@ -9,20 +9,22 @@ from typing import Optional
 
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QAction, QGuiApplication, QKeySequence
-from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QFileDialog, QFormLayout,
+from PySide6.QtWidgets import (QInputDialog, QAbstractItemView, QCheckBox, QComboBox, QFileDialog, QFormLayout,
                                QFrame, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QListWidget,
                                QListWidgetItem, QMainWindow, QMessageBox, QPlainTextEdit,
                                QHeaderView, QProgressBar, QPushButton, QSpinBox, QSplitter, QTableView,
                                QTabWidget, QVBoxLayout, QWidget, QDialog)
 
+from ..core import netconfig as nc
+from ..core import profile as prof
 from ..core import orchestrator as orch
-from ..core.models import OCCUPEE, SRC_OK, ALL_STATUSES, Snapshot, __version__
-from ..core.settings import Settings
+from ..core.models import CANDIDATE, DISPONIBLE, OCCUPEE, SRC_OK, ALL_STATUSES, Snapshot, __version__
+from ..core.settings import Settings, app_dir
 from ..planning import planner as P
 from ..reports import export as rx
 from . import theme
 from .tables import FilterProxy, TableModel
-from .worker import AnalysisWorker, ConnectivityWorker, DetectWorker, VerifyWorker
+from .worker import AnalysisWorker, ConnectivityWorker, DetectWorker, ResultWaiter, VerifyWorker
 
 _log = logging.getLogger("gtc_ipm")
 TAB_NAMES = ["Accueil", "Machines du domaine", "Équipements du réseau", "Plan d'adressage",
@@ -101,6 +103,8 @@ class MainWindow(QMainWindow):
         self.detector: Optional[DetectWorker] = None
         self.verifier: Optional[VerifyWorker] = None
         self.last_verify = None
+        self._launch = nc.launch_elevated   # remplaçable (tests)
+        self.result_waiter = None
         self.setWindowTitle(f"GTC Network IP Manager Pro {__version__}")
         self.resize(1250, 780)
         self.setStyleSheet(theme.STYLE)
@@ -342,6 +346,12 @@ class MainWindow(QMainWindow):
         self.btn_verify.setEnabled(not running)
         self.btn_cfg.setEnabled(has_plan and bool(self.selected_candidate()))
         self.btn_cfg.setToolTip("" if has_plan else no_plan)
+        can_apply = has_plan and bool(self.selected_candidate()) and nc.IS_WINDOWS
+        self.btn_apply.setEnabled(can_apply and not running)
+        if not nc.IS_WINDOWS:
+            self.btn_apply.setToolTip("Disponible uniquement sous Windows.")
+        elif not (has_plan and self.selected_candidate()):
+            self.btn_apply.setToolTip("Lancez une analyse puis sélectionnez une adresse candidate.")
 
     # ------------------------------------------------------------ Population
     def populate(self, snap: Snapshot) -> None:
@@ -512,6 +522,10 @@ class MainWindow(QMainWindow):
         self.btn_conn.setToolTip("Passerelle, Internet par IP, DNS du domaine et DNS externe : indique l'étape qui échoue.")
         self.btn_conn.clicked.connect(self.test_connectivity)
         row.addWidget(self.btn_conn)
+        self.btn_apply = QPushButton("Appliquer la configuration…")
+        self.btn_apply.setToolTip("Configure la carte en adresse fixe (administrateur requis, sauvegarde et retour arrière automatique).")
+        self.btn_apply.clicked.connect(self.apply_config)
+        row.addWidget(self.btn_apply)
         rw = QWidget()
         rl = QVBoxLayout(rw)
         rl.setContentsMargins(0, 0, 0, 0)
@@ -581,6 +595,125 @@ class MainWindow(QMainWindow):
                                               dom.dc_addresses if dom else [], self)
         self.conn_worker.done.connect(lambda t: (self.verify_out.setPlainText(t), self.btn_conn.setEnabled(True)))
         self.conn_worker.start()
+
+    # ---- Application de la configuration statique (action explicite) ----
+    def apply_config(self) -> None:
+        cand = self.selected_candidate()
+        if not cand or not self.snapshot:
+            return
+        if cand.status not in (DISPONIBLE, CANDIDATE):
+            self.verify_out.setPlainText(f"Refusé : l'adresse {cand.ip} est « {cand.status} ». "
+                                         "Seules les adresses candidates ou confirmées peuvent être appliquées.")
+            return
+        if self.verifier and self.verifier.isRunning():
+            return
+        if self.snapshot.imported_from:     # profil importé : ce poste n'est pas sur le segment, rien à sonder
+            self._apply_after_check(cand, None)
+            return
+        self.verify_out.setPlainText(f"Dernier contrôle de {cand.ip} avant application…")
+        self.btn_apply.setEnabled(False)
+        self.verifier = VerifyWorker(cand.ip, self.collectors, self.settings.ping_timeout_ms,
+                                     cand.status, cand.justification, self)
+        self.verifier.done.connect(lambda r, c=cand: self._apply_after_check(c, r))
+        self.verifier.failed.connect(lambda m: (self.verify_out.setPlainText(f"Contrôle impossible : {m}"),
+                                                self._refresh_enabled()))
+        self.verifier.start()
+
+    def _choose_adapter(self, adapters: list, target_net) -> Optional[object]:
+        same = [a for a in adapters if ipaddress.ip_address(a.ipv4) in target_net]
+        if len(same) == 1:
+            return same[0]
+        from PySide6.QtWidgets import QInputDialog
+        labels = [f"{a.alias} — {a.cidr} (index {a.index})" for a in adapters]
+        text, ok = QInputDialog.getItem(self, "Carte réseau", "Carte à configurer :", labels, 0, False)
+        return adapters[labels.index(text)] if ok else None
+
+    def _confirm_apply(self, text: str) -> bool:
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Warning)
+        box.setWindowTitle("Appliquer la configuration réseau")
+        box.setText("Cette action MODIFIE la configuration réseau de cet ordinateur.")
+        box.setInformativeText(text)
+        yes = box.addButton("Appliquer", QMessageBox.AcceptRole)
+        no = box.addButton("Annuler", QMessageBox.RejectRole)
+        box.setDefaultButton(no)
+        box.exec()
+        return box.clickedButton() is yes
+
+    def _apply_after_check(self, cand, res) -> None:
+        imported = bool(self.snapshot.imported_from)
+        if res is not None:
+            self.last_verify = res
+        self._refresh_enabled()
+        if res is not None and res.positive:
+            self.verify_out.setPlainText(res.text() + "\n\nAPPLICATION REFUSÉE : l'adresse répond ou est enregistrée.")
+            return
+        local = self.collectors.interfaces() if imported else self.snapshot.interfaces
+        adapters = {a.index: a for a in local if a.index > 0}
+        if not adapters:
+            self.verify_out.setPlainText("Application impossible : index de carte inconnu (détection native "
+                                         "indisponible). Utilisez la fiche de configuration manuellement.")
+            return
+        net = ipaddress.ip_network(cand.network)
+        ad = self._choose_adapter(list(adapters.values()), net)
+        if ad is None:
+            return
+        gw, dns, warns = rx.recommended_settings(cand, self.snapshot, (self.snapshot.known_internet if imported
+                                                                       else self.settings.known_internet))
+        if imported:
+            warns.insert(0, "PROFIL IMPORTÉ (" + self.snapshot.imported_from + ") : l'adresse n'a pas pu être "
+                            "vérifiée en direct depuis ce poste. Après application, le contrôleur de domaine doit "
+                            "répondre, sinon retour arrière automatique.")
+        if nc.in_remote_session():
+            warns.append("Vous êtes connecté en bureau à distance : la session sera probablement coupée pendant "
+                         "le changement. Sans confirmation locale, l'ancienne configuration sera restaurée.")
+        plan = nc.NetPlan(ad.index, f"{ad.alias} ({ad.cidr})", cand.ip, net.prefixlen, gw, dns,
+                          check_hosts=list(self.snapshot.domain.dc_addresses) if imported else [])
+        errs = plan.validate()
+        if errs:
+            self.verify_out.setPlainText("Application impossible : " + " ; ".join(errs))
+            return
+        text = (f"Carte : {ad.alias}\nAvant : {ad.cidr}, passerelle {ad.gateway or 'aucune'}, "
+                f"{'DHCP' if ad.dhcp_enabled else 'adresse fixe'}, DNS {', '.join(ad.dns_servers) or '—'}\n"
+                f"Après : {cand.ip}/{net.prefixlen}, passerelle {gw or 'AUCUNE'}, DNS {', '.join(dns) or 'automatique'}\n\n"
+                + "\n".join("• " + w for w in warns) +
+                "\n\nUne sauvegarde est faite, la connectivité est vérifiée, puis vous confirmez sous 60 s "
+                "sinon l'ancienne configuration est restaurée. Aucun redémarrage n'est nécessaire ; la "
+                "configuration persiste après redémarrage. Windows demandera l'autorisation administrateur.")
+        if not self._confirm_apply(text):
+            self.verify_out.setPlainText("Application annulée par l'utilisateur.")
+            return
+        import time
+        d = app_dir() / "netcfg"
+        d.mkdir(parents=True, exist_ok=True)
+        stamp = time.strftime("%Y%m%d_%H%M%S")
+        plan.backup_path = str(d / f"sauvegarde_{stamp}.txt")
+        plan.result_path = str(d / f"resultat_{stamp}.json")
+        plan_file = d / f"plan_{stamp}.json"
+        plan_file.write_text(plan.to_json(), encoding="utf-8")
+        try:
+            self._launch(["--netcfg-apply", str(plan_file)])
+        except OSError as e:
+            self.verify_out.setPlainText(f"Application non lancée : {e}")
+            return
+        self.verify_out.setPlainText("Application en cours dans la fenêtre administrateur… "
+                                     f"(sauvegarde : {plan.backup_path})")
+        self.result_waiter = ResultWaiter(plan.result_path, 900, self)
+        self.result_waiter.done.connect(self._on_apply_result)
+        self.result_waiter.start()
+
+    def _on_apply_result(self, text: str) -> None:
+        import json
+        if not text:
+            self.verify_out.setPlainText("Aucun résultat reçu de la fenêtre administrateur (refus UAC ou fermeture).")
+            return
+        r = json.loads(text)
+        label = {"kept": "Configuration appliquée et conservée.", "rolled_back": "Configuration annulée : "
+                 "l'ancienne configuration a été restaurée.", "failed": "Échec : rien n'a été modifié.",
+                 "rollback_failed": "ATTENTION : restauration échouée, voir la sauvegarde."}.get(r["status"], r["status"])
+        self.verify_out.setPlainText(label + "\n" + "\n".join(r.get("messages", [])) + "\n\n" +
+                                     "\n".join(r.get("verification", [])))
+        self.detect_networks()
 
     def config_sheet_text(self) -> str:
         e = self.selected_candidate()
@@ -700,6 +833,28 @@ class MainWindow(QMainWindow):
             row.addWidget(b)
         row.addStretch(1)
         lay.addLayout(row)
+        lay.addWidget(QLabel("<b>Profils de sites (domaines enregistrés)</b>"))
+        self.prof_list = QListWidget()
+        self.prof_list.setMaximumHeight(110)
+        lay.addWidget(self.prof_list)
+        prow = QHBoxLayout()
+        self.btn_prof_save = QPushButton("Enregistrer le site analysé…")
+        self.btn_prof_load = QPushButton("Charger le profil sélectionné")
+        self.btn_prof_del = QPushButton("Supprimer")
+        self.btn_prof_exp = QPushButton("Exporter vers un fichier…")
+        self.btn_prof_imp = QPushButton("Importer un fichier…")
+        self.btn_prof_save.clicked.connect(self._profile_save_dialog)
+        self.btn_prof_load.clicked.connect(self.profile_load_selected)
+        self.btn_prof_del.clicked.connect(self.profile_delete_selected)
+        self.btn_prof_exp.clicked.connect(self._profile_export_dialog)
+        self.btn_prof_imp.clicked.connect(self._profile_import_dialog)
+        for b in (self.btn_prof_save, self.btn_prof_load, self.btn_prof_del, self.btn_prof_exp, self.btn_prof_imp):
+            prow.addWidget(b)
+        lay.addLayout(prow)
+        lay.addWidget(self._note("Un profil est une photo datée d'un site (domaine, contrôleurs, DNS, plan d'adressage, "
+                                 "passerelle Internet). Chargé sur un poste hors domaine, il permet de choisir une IP et "
+                                 "de l'appliquer ; les adresses restent « à vérifier » (jamais confirmées)."))
+        self._refresh_profiles()
         lay.addWidget(QLabel("<b>État de chaque source</b>"))
         self.src_model = TableModel(["Source", "État", "Détail", "Durée (s)", "Éléments", "Début"])
         self.src_view, _ = _table(self.src_model, 2)
@@ -729,6 +884,86 @@ class MainWindow(QMainWindow):
         except OSError as e:
             QMessageBox.warning(self, "Export impossible", f"{e}\nChoisissez un autre emplacement "
                                 "(le fichier est peut-être ouvert dans Excel).")
+
+    # ---- Profils de sites ----
+    def profiles_dir(self) -> Path:
+        return app_dir() / "profiles"
+
+    def _refresh_profiles(self) -> None:
+        self.prof_list.clear()
+        for p in prof.list_profiles(self.profiles_dir()):
+            it = QListWidgetItem(f"{p['name']} — domaine {p['domain'] or '?'} — {p['networks']} réseau(x) — {p['created_at']}")
+            it.setData(Qt.UserRole, p["path"])
+            self.prof_list.addItem(it)
+
+    def profile_save(self, name: str) -> Path:
+        if not self.snapshot or self.snapshot.imported_from:
+            raise prof.ProfileError("Analysez d'abord le réseau depuis une machine du domaine "
+                                    "(un profil importé ne peut pas être ré-enregistré comme analyse).")
+        import socket
+        d = prof.build_profile(self.snapshot, socket.gethostname(), self.settings.known_internet)
+        path = prof.save_profile(self.profiles_dir(), name, d)
+        self._refresh_profiles()
+        self.rep_msg.setText(f"Profil « {name} » enregistré : {path}")
+        return path
+
+    def _profile_save_dialog(self) -> None:
+        default = (self.snapshot.domain.name if self.snapshot and self.snapshot.domain.in_domain else "") or "site"
+        name, ok = QInputDialog.getText(self, "Enregistrer le profil", "Nom du profil (ex. nom du domaine) :", text=default)
+        if ok and name.strip():
+            try:
+                self.profile_save(name)
+            except (prof.ProfileError, OSError) as e:
+                QMessageBox.warning(self, "Enregistrement impossible", str(e))
+
+    def profile_load_path(self, path: str) -> None:
+        snap = prof.load_profile_file(path)
+        self.snapshot = snap
+        self.warn_box.setPlainText("\n".join(snap.warnings))
+        self.populate(snap)
+        self._refresh_enabled()
+        self.statusBar().showMessage(f"Profil chargé : {snap.profile_name or snap.imported_from}")
+        self.rep_msg.setText(f"Profil chargé : {snap.profile_name or '(sans nom)'} — {snap.imported_from}")
+
+    def profile_load_selected(self) -> None:
+        it = self.prof_list.currentItem()
+        if not it:
+            self.rep_msg.setText("Sélectionnez d'abord un profil dans la liste.")
+            return
+        try:
+            self.profile_load_path(it.data(Qt.UserRole))
+        except (prof.ProfileError, OSError, ValueError) as e:
+            QMessageBox.warning(self, "Profil illisible", str(e))
+
+    def profile_delete_selected(self) -> None:
+        it = self.prof_list.currentItem()
+        if not it:
+            return
+        if QMessageBox.question(self, "Supprimer", f"Supprimer le profil « {it.text()} » ?") == QMessageBox.Yes:
+            try:
+                prof.delete_profile(self.profiles_dir(), it.data(Qt.UserRole))
+            except (prof.ProfileError, OSError) as e:
+                QMessageBox.warning(self, "Suppression impossible", str(e))
+            self._refresh_profiles()
+
+    def _profile_export_dialog(self) -> None:
+        if not self.snapshot or not self.snapshot.plan or self.snapshot.imported_from:
+            self.rep_msg.setText("Exportez après une analyse faite sur une machine du domaine.")
+            return
+        p, _ = QFileDialog.getSaveFileName(self, "Exporter le profil", "profil_site.json", "JSON (*.json)")
+        if p:
+            import socket
+            d = prof.build_profile(self.snapshot, socket.gethostname(), self.settings.known_internet)
+            self._guard(lambda: Path(p).write_text(prof.dump_profile(d), encoding="utf-8"))
+            self.rep_msg.setText(f"Profil exporté : {p}")
+
+    def _profile_import_dialog(self) -> None:
+        p, _ = QFileDialog.getOpenFileName(self, "Importer un profil", "", "Profil (*.json)")
+        if p:
+            try:
+                self.profile_load_path(p)
+            except (prof.ProfileError, OSError, ValueError) as e:
+                QMessageBox.warning(self, "Profil illisible", str(e))
 
     def _export_csv_dialog(self) -> None:
         d = QFileDialog.getExistingDirectory(self, "Dossier d'export CSV")
@@ -762,7 +997,7 @@ class MainWindow(QMainWindow):
         super().keyPressEvent(e)
 
     def closeEvent(self, e) -> None:
-        for wk in (self.worker, self.detector, self.verifier, getattr(self, "conn_worker", None)):
+        for wk in (self.worker, self.detector, self.verifier, getattr(self, "conn_worker", None), self.result_waiter):
             if wk and wk.isRunning():
                 if hasattr(wk, "cancel"):
                     wk.cancel()

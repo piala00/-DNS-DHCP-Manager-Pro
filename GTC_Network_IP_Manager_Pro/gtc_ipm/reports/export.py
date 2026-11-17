@@ -174,3 +174,27 @@ def diagnostic_json(snap: Snapshot) -> str:
         "sources": [s.__dict__ for s in snap.sources], "avertissements": snap.warnings,
         "domaine": snap.domain.__dict__, "erreurs_dhcp": snap.dhcp.errors, "journal": snap.log[-500:],
     }, ensure_ascii=False, indent=2)
+
+
+def recommended_settings(entry: IpEntry, snap: Snapshot, known_internet: dict | None = None
+                         ) -> tuple[str, list[str], list[str]]:
+    """(passerelle, DNS, avertissements) pour une adresse fixe dans entry.network."""
+    import ipaddress
+    net = ipaddress.ip_network(entry.network)
+    paths = list(snap.internet) + [p for p in inet.remembered_as_paths(known_internet or {})
+                                   if not any(q.gateway == p.gateway and q.internet_ok for q in snap.internet)]
+    warns: list[str] = []
+    best = inet.best_gateway_for(entry.network, paths)
+    gw = best.gateway if best else ""
+    if not best:
+        warns.append("Aucune passerelle Internet connue dans ce réseau : le poste n'aura PAS Internet "
+                     "(voir la section « ACCÈS INTERNET » de la fiche).")
+    elif best not in snap.internet:
+        warns.append(f"La passerelle {gw} est MÉMORISÉE (non testée à l'instant).")
+    itf = next((i for i in snap.interfaces if ipaddress.ip_address(i.ipv4) in net), None)
+    local_dns = list(itf.dns_servers) if itf else []
+    dcs = list(snap.domain.dc_addresses) if snap.domain.in_domain else []
+    dns = dcs or local_dns
+    if not dns:
+        warns.append("Aucun DNS connu : le DNS restera automatique.")
+    return gw, dns, warns

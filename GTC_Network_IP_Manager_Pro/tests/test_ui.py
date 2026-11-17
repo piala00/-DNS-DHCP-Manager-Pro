@@ -198,3 +198,72 @@ def test_close_while_running_does_not_hang(app):
     t0 = time.time()
     w.close()
     assert time.time() - t0 < 10 and not w.worker.isRunning()
+
+
+# --- Application de la configuration statique (lanceur UAC SIMULÉ, aucune modification réelle) ---
+def _ready_window(app, monkeypatch, tmp_path):
+    from gtc_ipm.core import netconfig as nc
+    from gtc_ipm.core import settings as st
+    monkeypatch.setattr(nc, "IS_WINDOWS", True)
+    monkeypatch.setattr(st, "app_dir", lambda: tmp_path)
+    import gtc_ipm.ui.main_window as mw
+    monkeypatch.setattr(mw, "app_dir", lambda: tmp_path)
+    w = make(app)
+    click(w.btn_analyze)
+    wait(app, lambda: w.snapshot is not None and not w.worker.isRunning())
+    for i in w.snapshot.interfaces:          # la collecte simulée n'a pas d'index : on en donne un
+        i.index = 12
+    return w
+
+
+def test_apply_disabled_without_candidate_or_off_windows(app, monkeypatch, tmp_path):
+    w = make(app)
+    assert not w.btn_apply.isEnabled()
+    w.close()
+    w = _ready_window(app, monkeypatch, tmp_path)
+    w.cand_view.selectRow(0)
+    w._refresh_enabled()
+    assert w.btn_apply.isEnabled()
+    from gtc_ipm.core import netconfig as nc
+    monkeypatch.setattr(nc, "IS_WINDOWS", False)
+    w._refresh_enabled()
+    assert not w.btn_apply.isEnabled() and "Windows" in w.btn_apply.toolTip()
+    w.close()
+
+
+def test_apply_launches_elevated_helper_with_valid_plan(app, monkeypatch, tmp_path):
+    from gtc_ipm.core import netconfig as nc
+    w = _ready_window(app, monkeypatch, tmp_path)
+    launched = []
+    w._launch = lambda args: launched.append(args)
+    w._confirm_apply = lambda text: (launched.append(("txt", text)) or True)
+    w.cand_view.selectRow(0)
+    click(w.btn_apply)
+    wait(app, lambda: len(launched) >= 2)
+    txt = launched[0][1]
+    assert "Avant" in txt and "Après" in txt and "192.168.1.100" in txt and "60 s" in txt
+    assert launched[1][0] == "--netcfg-apply"
+    plan = nc.NetPlan.from_json(open(launched[1][1], encoding="utf-8").read())
+    assert plan.ip == "192.168.1.100" and plan.prefix == 24 and plan.adapter_index == 12
+    assert not plan.validate() and "netcfg" in plan.backup_path
+    # le résultat du processus élevé est relu puis la détection est relancée
+    open(plan.result_path, "w", encoding="utf-8").write('{"status": "kept", "messages": ["ok"], "verification": []}')
+    wait(app, lambda: "conservée" in w.verify_out.toPlainText())
+    w.close()
+
+
+def test_apply_refused_when_user_cancels_or_ip_in_use(app, monkeypatch, tmp_path):
+    w = _ready_window(app, monkeypatch, tmp_path)
+    launched = []
+    w._launch = lambda args: launched.append(args)
+    w._confirm_apply = lambda text: False
+    w.cand_view.selectRow(0)
+    click(w.btn_apply)
+    wait(app, lambda: "annulée" in w.verify_out.toPlainText())
+    assert not launched
+    # une adresse dont le statut n'est pas candidat/confirmé est refusée sans rien lancer
+    cand = w.selected_candidate()
+    cand.status = "OCCUPÉE"
+    w.apply_config()
+    assert "Refusé" in w.verify_out.toPlainText() and not launched
+    w.close()

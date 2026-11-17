@@ -83,3 +83,32 @@ class ConnectivityWorker(QThread):
             self.done.emit("\n".join(lines))
         except Exception as e:  # noqa: BLE001
             self.done.emit(f"Test impossible : {type(e).__name__}: {e}")
+
+
+class ResultWaiter(QThread):
+    """Attend le fichier de résultat écrit par le processus élevé."""
+    done = Signal(str)
+
+    def __init__(self, path: str, timeout_s: int = 900, parent=None):
+        super().__init__(parent)
+        self.path, self.timeout_s = path, timeout_s
+        self._stop = False
+
+    def cancel(self) -> None:
+        self._stop = True
+
+    def run(self) -> None:
+        import os
+        import time
+        t0 = time.time()
+        while time.time() - t0 < self.timeout_s and not self._stop:
+            if os.path.exists(self.path):
+                time.sleep(0.3)
+                try:
+                    with open(self.path, encoding="utf-8") as f:
+                        self.done.emit(f.read())
+                    return
+                except OSError:
+                    pass
+            time.sleep(0.5)
+        self.done.emit("")

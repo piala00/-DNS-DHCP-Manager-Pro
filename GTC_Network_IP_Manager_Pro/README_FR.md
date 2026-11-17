@@ -2,7 +2,7 @@
 
 Logiciel Windows (interface graphique, en français) pour **inventorier les ordinateurs du domaine Active Directory**,
 **observer les équipements réellement présents sur le réseau** et **proposer des adresses IP sûres** pour de nouveaux postes.
-Il fonctionne en **lecture seule** : il ne modifie ni l'AD, ni le DHCP, ni le DNS, ni vos cartes réseau.
+L'analyse est en **lecture seule** : elle ne modifie ni l'AD, ni le DHCP, ni le DNS. La seule action qui modifie quelque chose est le bouton **« Appliquer la configuration… »** (adresse fixe sur une carte), explicite, avec droits administrateur, sauvegarde, vérification et retour arrière automatique.
 
 ## Utilisation (sans terminal, sans Python)
 1. Lancez `GTC_Network_IP_Manager_Pro.exe` (aucune installation, Python non requis).
@@ -38,3 +38,16 @@ python main.py                    # lancer l'application
 ```
 Architecture : `gtc_ipm/{ui,discovery,ad,dhcp,dns,planning,reports,core}`. Compilation : voir le workflow
 `.github/workflows/gtc-network-ip-manager-pro.yml` (PyInstaller `--onefile --windowed`, x64).
+
+
+## Appliquer une adresse fixe (nouveau)
+1. Choisir une adresse candidate (onglet Plan d'adressage), cliquer **Appliquer la configuration…**.
+2. Le logiciel contrôle l'adresse en direct (refus si elle répond), affiche avant/après, demande l'autorisation administrateur (UAC).
+3. Sauvegarde de la configuration (`netsh interface dump`, dossier `%APPDATA%\GTC_Network_IP_Manager_Pro\netcfg`), application, vérification, puis **confirmation sous 60 s : sans confirmation, l'ancienne configuration est restaurée**.
+4. Aucun redémarrage nécessaire ; la configuration persiste après redémarrage.
+Attention : en bureau à distance (RDP) la session peut être coupée ; faites le premier essai sur un poste de test avec accès console.
+
+## Profils de sites (domaines enregistrés)
+- Sur une machine **du domaine** : analyser, puis Rapports > **Enregistrer le site analysé…** (nom = nom du domaine). Possibilité d'exporter vers un fichier.
+- Sur un poste **hors domaine** : Rapports > charger un profil (liste ou fichier), choisir une adresse, **Appliquer**.
+- Un profil est une photo datée : les adresses importées sont « CANDIDATE_À_VÉRIFIER », jamais confirmées. Après application, le contrôleur de domaine doit répondre, sinon retour arrière automatique.

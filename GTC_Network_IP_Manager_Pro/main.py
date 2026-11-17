@@ -34,9 +34,27 @@ def _selftest(out_path: str) -> int:
     return 0 if result["ok"] else 1
 
 
+def _netcfg_apply(plan_path: str) -> int:
+    """Mode helper (lancé avec élévation) : applique un plan statique avec retour arrière."""
+    from PySide6.QtWidgets import QApplication
+    from gtc_ipm.core import netconfig as nc
+    from gtc_ipm.core import orchestrator as orch
+    from gtc_ipm.ui.apply_dialog import ApplyDialog
+    with open(plan_path, encoding="utf-8") as f:
+        plan = nc.NetPlan.from_json(f.read())
+    app = QApplication.instance() or QApplication(sys.argv)
+    dlg = ApplyDialog(plan, collectors=orch.Collectors())
+    dlg.show()
+    dlg.start()
+    app.exec()
+    return 0 if dlg.result is not None and dlg.result.status == "kept" else 1
+
+
 def main() -> int:
     if len(sys.argv) >= 3 and sys.argv[1] == "--selftest":
         return _selftest(sys.argv[2])
+    if len(sys.argv) >= 3 and sys.argv[1] == "--netcfg-apply":
+        return _netcfg_apply(sys.argv[2])
     from PySide6.QtWidgets import QApplication, QMessageBox
     from gtc_ipm.core.logging_setup import setup_logging
     from gtc_ipm.ui.main_window import MainWindow

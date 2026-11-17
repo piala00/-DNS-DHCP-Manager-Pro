@@ -5,11 +5,11 @@ VSVersionInfo(
     StringFileInfo([StringTable('040C04B0', [
       StringStruct('CompanyName', 'GTC SARL'),
       StringStruct('FileDescription', 'GTC Network IP Manager Pro'),
-      StringStruct('FileVersion', '1.0.0.0'),
+      StringStruct('FileVersion', '1.1.0.0'),
       StringStruct('InternalName', 'GTC_Network_IP_Manager_Pro'),
       StringStruct('OriginalFilename', 'GTC_Network_IP_Manager_Pro.exe'),
       StringStruct('ProductName', 'GTC Network IP Manager Pro'),
-      StringStruct('ProductVersion', '1.0.0.0')])]),
+      StringStruct('ProductVersion', '1.1.0.0')])]),
     VarFileInfo([VarStruct('Translation', [1036, 1200])])
   ]
 )

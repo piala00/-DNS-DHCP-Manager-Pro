@@ -5,7 +5,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Optional
 
-__version__ = "1.0.0"
+__version__ = "1.1.0"
 
 # Statuts du plan d'adressage (jamais de statut « libre » sans preuve).
 OCCUPEE = "OCCUPÉE"
@@ -43,6 +43,7 @@ class Interface:
     dhcp_enabled: bool = False
     dhcp_server: str = ""
     dns_suffix: str = ""
+    index: int = 0  # InterfaceIndex Windows (0 = inconnu)
 
     @property
     def cidr(self) -> str:
@@ -186,3 +187,6 @@ class Snapshot:
     gateway_candidates: list[str] = field(default_factory=list)  # équipements passerelle probables
     log: list[str] = field(default_factory=list)
     cancelled: bool = False
+    profile_name: str = ""
+    imported_from: str = ""  # non vide : profil importé (photo datée, non vérifiée)
+    known_internet: dict = field(default_factory=dict)  # voies Internet du profil importé
