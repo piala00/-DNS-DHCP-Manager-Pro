@@ -6,6 +6,7 @@ transmises par variables d'environnement (GTCARG_*), jamais concaténées.
 from __future__ import annotations
 
 import base64
+import html
 import ipaddress
 import json
 import os
@@ -51,7 +52,8 @@ def run_powershell(script: str, args: Optional[dict[str, str]] = None,
         env["GTCARG_" + k] = v
     try:
         p = subprocess.run(
-            ["powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+            ["powershell.exe", "-NoProfile", "-NonInteractive", "-InputFormat", "None",
+             "-ExecutionPolicy", "Bypass",
              "-EncodedCommand", encoded],
             capture_output=True, timeout=timeout, env=env, creationflags=_flags(),
             stdin=subprocess.DEVNULL)
@@ -61,9 +63,20 @@ def run_powershell(script: str, args: Optional[dict[str, str]] = None,
         raise SourceUnavailable(f"Délai dépassé ({timeout:.0f} s).") from e
     out = p.stdout.decode("utf-8", errors="replace").strip()
     if p.returncode != 0:
-        err = p.stderr.decode("utf-8", errors="replace").strip()
+        err = clean_ps_error(p.stderr.decode("utf-8", errors="replace"))
         raise SourceUnavailable((err or out or f"code {p.returncode}")[:500])
     return out
+
+
+def clean_ps_error(text: str) -> str:
+    """PowerShell peut renvoyer ses erreurs au format CLIXML : on en extrait le texte."""
+    text = (text or "").strip()
+    if text.startswith("#< CLIXML"):
+        parts = re.findall(r'<S S="Error">(.*?)</S>', text, flags=re.S)
+        text = " ".join(parts)
+        text = html.unescape(text.replace("_x000D__x000A_", " "))
+        text = re.sub(r"\s+", " ", text).strip()
+    return text
 
 
 def parse_json_list(text: str) -> list[dict[str, Any]]:

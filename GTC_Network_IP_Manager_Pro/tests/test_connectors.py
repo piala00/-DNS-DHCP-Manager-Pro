@@ -18,7 +18,7 @@ from gtc_ipm.core import orchestrator as orch  # noqa: E402
 from gtc_ipm.core.models import (CANDIDATE, DISPONIBLE, DhcpData, DomainInfo,  # noqa: E402
                                  Interface, Route, SRC_CANCELLED, SRC_OK,
                                  SRC_PARTIAL, SRC_UNAVAILABLE, AdComputer)
-from gtc_ipm.core.psrunner import (SourceUnavailable, parse_json_list,  # noqa: E402
+from gtc_ipm.core.psrunner import (SourceUnavailable, clean_ps_error, parse_json_list,  # noqa: E402
                                    valid_host, valid_ip)
 from gtc_ipm.core.settings import Settings  # noqa: E402
 from gtc_ipm.dhcp import collector as dh  # noqa: E402
@@ -33,6 +33,14 @@ def test_parse_json_variants():
     assert parse_json_list('{"a":1}') == [{"a": 1}]
     assert parse_json_list('﻿[{"a":1},{"b":2}]') == [{"a": 1}, {"b": 2}]
     assert parse_json_list("null") == [] and parse_json_list("[]") == []
+
+
+def test_clean_clixml_error():
+    raw = ('#< CLIXML\r\n<Objs Version="1.1.0.1"><S S="Error">Import-Module : Le module sp&#233;cifi&#233; '
+           'DhcpServer est introuvable._x000D__x000A_</S><S S="Error">At line:1</S></Objs>')
+    out = clean_ps_error(raw)
+    assert "CLIXML" not in out and "spécifié" in out and "_x000D_" not in out
+    assert clean_ps_error("erreur simple") == "erreur simple"
 
 
 @pytest.mark.parametrize("bad", ["a b", "x;rm -rf", "$(calc)", "a`b", "", "-bad-", "x" * 300])
