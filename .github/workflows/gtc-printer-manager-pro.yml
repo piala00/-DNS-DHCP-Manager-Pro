@@ -78,6 +78,7 @@ jobs:
             --add-binary "$root\vcrt\*.dll;." `
             main.py
           if (!(Test-Path distdir/GTC_Printer_Manager_Pro/GTC_Printer_Manager_Pro.exe)) { throw 'folder EXE missing' }
+          python tools/make_integrity.py distdir/GTC_Printer_Manager_Pro
 
       - name: Smoke test FOLDER version without any Python on PATH
         shell: pwsh
@@ -95,6 +96,31 @@ jobs:
           if (!(Test-Path $out)) { throw "selftest produced no output (exit $($p.ExitCode))" }
           $r = Get-Content $out -Raw | ConvertFrom-Json
           if (-not $r.ok -or $p.ExitCode -ne 0) { throw 'folder selftest failed' }
+
+      - name: Startup self-diagnosis test (corrupted Qt DLL must be reported, not a Python traceback)
+        shell: pwsh
+        run: |
+          $dir = Join-Path $env:RUNNER_TEMP 'corrupt_dir'
+          New-Item -ItemType Directory -Force $dir | Out-Null
+          Copy-Item distdir/GTC_Printer_Manager_Pro $dir -Recurse
+          $app = Join-Path $dir 'GTC_Printer_Manager_Pro'
+          $exe = Join-Path $app 'GTC_Printer_Manager_Pro.exe'
+          # 1. dossier sain : --diagnose = code 0
+          $ok = Join-Path $dir 'diag_ok.txt'
+          $p = Start-Process -FilePath $exe -ArgumentList '--diagnose', $ok -PassThru -Wait
+          Get-Content $ok -Raw
+          if ($p.ExitCode -ne 0) { throw "diagnose on healthy folder returned $($p.ExitCode)" }
+          # 2. on abime Qt6Widgets.dll (zeros) : demarrage normal = code 3 + rapport qui nomme le fichier
+          $dll = Get-ChildItem $app -Recurse -Filter Qt6Widgets.dll | Select-Object -First 1
+          [System.IO.File]::WriteAllBytes($dll.FullName, (New-Object byte[] 5000))
+          $env:GTC_PRN_NO_DIALOG = '1'
+          $env:GTC_PRN_DIAG_DIR = $dir
+          $p = Start-Process -FilePath $exe -PassThru -Wait
+          $rep = Join-Path $dir 'GTC_Printer_Manager_Pro_diagnostic.txt'
+          if (!(Test-Path $rep)) { throw "no diagnostic report written (exit $($p.ExitCode))" }
+          Get-Content $rep -Raw
+          if ($p.ExitCode -ne 3) { throw "expected exit 3, got $($p.ExitCode)" }
+          if ((Get-Content $rep -Raw) -notmatch 'Qt6Widgets\.dll') { throw 'report does not name the corrupted DLL' }
 
       - name: Smoke test EXE without any Python on PATH
         shell: pwsh

@@ -1,4 +1,5 @@
 """Point d'entrée de GTC Printer Manager Pro."""
+import importlib
 import json
 import os
 import sys
@@ -33,6 +34,12 @@ def _selftest(out_path: str) -> int:
         win.close()
     except Exception:  # noqa: BLE001
         result["error"] = traceback.format_exc()
+    try:
+        from gtc_prn.core import diagnostic
+        result["bundle_problems"] = diagnostic.diagnose()[1]
+    except Exception as e:  # noqa: BLE001
+        result["bundle_problems"] = [f"diagnostic impossible : {e}"]
+    result["ok"] = bool(result["ok"]) and not result["bundle_problems"]
     with open(out_path, "w", encoding="utf-8") as f:
         json.dump(result, f, ensure_ascii=False, indent=2)
     return 0 if result["ok"] else 1
@@ -59,9 +66,25 @@ def _prn_job(job_path: str) -> int:
     return 0 if ok else 1
 
 
+def _diagnose(out_path: str) -> int:
+    """--diagnose <fichier> : contrôle les fichiers du dossier (format, architecture, intégrité), sans Qt."""
+    from gtc_prn.core import diagnostic
+    text, problems = diagnostic.build_report()
+    with open(out_path, "w", encoding="utf-8") as f:
+        f.write(text)
+    return 4 if problems else 0
+
+
 def main() -> int:
+    if len(sys.argv) >= 3 and sys.argv[1] == "--diagnose":
+        return _diagnose(sys.argv[2])
     if len(sys.argv) >= 3 and sys.argv[1] == "--selftest":
         return _selftest(sys.argv[2])
+    try:
+        importlib.import_module("PySide6.QtWidgets")     # échec de chargement de Qt => diagnostic clair, pas une trace Python
+    except ImportError as e:
+        from gtc_prn.core import diagnostic
+        return diagnostic.startup_failure(e)
     if len(sys.argv) >= 3 and sys.argv[1] == "--prn-job":
         return _prn_job(sys.argv[2])
     from PySide6.QtWidgets import QApplication, QMessageBox

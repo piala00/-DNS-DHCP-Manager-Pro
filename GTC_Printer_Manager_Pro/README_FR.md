@@ -1,4 +1,4 @@
-# GTC Printer Manager Pro 1.0.0
+# GTC Printer Manager Pro 1.0.1
 
 Détecte les imprimantes installées sur un poste Windows, sauvegarde leurs pilotes et leurs paramètres,
 et les restaure sur un autre poste. **Version portable : un seul .exe, aucun Python, aucune installation.**
