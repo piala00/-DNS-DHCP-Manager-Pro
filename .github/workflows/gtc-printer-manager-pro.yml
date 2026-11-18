@@ -1,0 +1,127 @@
+name: GTC Printer Manager Pro - Windows build
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'GTC_Printer_Manager_Pro/**'
+      - '.github/workflows/gtc-printer-manager-pro.yml'
+
+jobs:
+  build:
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    defaults:
+      run:
+        working-directory: GTC_Printer_Manager_Pro
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          architecture: 'x64'
+          cache: pip
+          cache-dependency-path: GTC_Printer_Manager_Pro/requirements-dev.txt
+
+      - name: Install pinned dependencies
+        shell: pwsh
+        run: python -m pip install -r requirements-dev.txt
+
+      - name: Static analysis (pyflakes)
+        shell: pwsh
+        run: python -m pyflakes gtc_prn tests main.py
+
+      - name: Unit and UI tests (simulated data, offscreen Qt)
+        shell: pwsh
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: python -m pytest tests -v
+
+      - name: Real Windows integration test (native collectors, PrintBrm, real printer round trip)
+        shell: pwsh
+        run: python tests/windows_smoke.py
+
+      - name: Collect Visual C++ runtime DLLs (app-local deployment)
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force vcrt | Out-Null
+          foreach ($n in 'msvcp140.dll','msvcp140_1.dll','msvcp140_2.dll','vcruntime140.dll','vcruntime140_1.dll','concrt140.dll') {
+            $p = Join-Path $env:SystemRoot "System32\$n"
+            if (Test-Path $p) { Copy-Item $p vcrt/ } else { Write-Host "absent: $n" }
+          }
+          Get-ChildItem vcrt | Select-Object Name, Length
+
+      - name: Build standalone EXE
+        shell: pwsh
+        run: |
+          python -m PyInstaller --noconfirm --clean --onefile --windowed `
+            --name GTC_Printer_Manager_Pro `
+            --version-file version_info.txt `
+            --collect-submodules gtc_prn `
+            --add-binary 'vcrt\*.dll;.' `
+            main.py
+          if (!(Test-Path dist/GTC_Printer_Manager_Pro.exe)) { throw 'EXE missing' }
+          $b = [System.IO.File]::ReadAllBytes((Resolve-Path dist/GTC_Printer_Manager_Pro.exe))
+          if ($b[0] -ne 77 -or $b[1] -ne 90) { throw 'Not a PE executable' }
+
+      - name: Smoke test EXE without any Python on PATH
+        shell: pwsh
+        run: |
+          $dir = Join-Path $env:RUNNER_TEMP 'clean'
+          New-Item -ItemType Directory -Force $dir | Out-Null
+          Copy-Item dist/GTC_Printer_Manager_Pro.exe $dir
+          $env:PATH = "$env:SystemRoot\System32;$env:SystemRoot"
+          Remove-Item Env:PYTHONHOME, Env:PYTHONPATH -ErrorAction SilentlyContinue
+          if (Get-Command python -ErrorAction SilentlyContinue) { throw 'python still reachable on PATH' }
+          $out = Join-Path $dir 'selftest.json'
+          $p = Start-Process -FilePath (Join-Path $dir 'GTC_Printer_Manager_Pro.exe') `
+                 -ArgumentList '--selftest', $out -PassThru
+          if (-not $p.WaitForExit(180000)) { $p.Kill(); throw 'selftest timeout' }
+          if (!(Test-Path $out)) { throw "selftest produced no output (exit $($p.ExitCode))" }
+          Get-Content $out -Raw
+          $r = Get-Content $out -Raw | ConvertFrom-Json
+          if (-not $r.ok -or $p.ExitCode -ne 0) { throw 'selftest failed' }
+
+      - name: Package portable ZIP and SHA-256
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force pkg | Out-Null
+          Copy-Item dist/GTC_Printer_Manager_Pro.exe pkg/
+          Copy-Item README_FR.md, NOTES_VERSION.md pkg/
+          Compress-Archive -Path pkg/* -DestinationPath GTC_Printer_Manager_Pro_Portable_x64.zip -Force
+          $h1 = (Get-FileHash dist/GTC_Printer_Manager_Pro.exe -Algorithm SHA256).Hash
+          $h2 = (Get-FileHash GTC_Printer_Manager_Pro_Portable_x64.zip -Algorithm SHA256).Hash
+          "$h1  GTC_Printer_Manager_Pro.exe`n$h2  GTC_Printer_Manager_Pro_Portable_x64.zip" |
+            Out-File -Encoding ascii SHA256SUMS.txt
+          Get-Content SHA256SUMS.txt
+          "### SHA-256`n``````n$(Get-Content SHA256SUMS.txt -Raw)``````" | Out-File -Append $env:GITHUB_STEP_SUMMARY
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: GTC_Printer_Manager_Pro_Windows_x64
+          path: |
+            GTC_Printer_Manager_Pro/dist/GTC_Printer_Manager_Pro.exe
+            GTC_Printer_Manager_Pro/GTC_Printer_Manager_Pro_Portable_x64.zip
+            GTC_Printer_Manager_Pro/SHA256SUMS.txt
+          if-no-files-found: error
+
+      - name: Publish GitHub Release (main branch only)
+        if: github.ref == 'refs/heads/main'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = 'gtc-prn-pro-latest'
+          $files = 'dist/GTC_Printer_Manager_Pro.exe','GTC_Printer_Manager_Pro_Portable_x64.zip','SHA256SUMS.txt'
+          $existing = gh release list --repo "${{ github.repository }}" --json tagName --jq ".[] | select(.tagName == `"$tag`") | .tagName"
+          if ($existing -eq $tag) {
+            gh release upload $tag @files --clobber --repo "${{ github.repository }}"
+          } else {
+            gh release create $tag @files --title 'GTC Printer Manager Pro - latest build' `
+              --notes 'Build CI Windows x64, portable sans Python. Voir SHA256SUMS.txt. Restauration reelle d une imprimante PDF Sage a port propre a valider sur poste de test.' `
+              --target "${{ github.sha }}" --repo "${{ github.repository }}"
+          }
+          if ($LASTEXITCODE -ne 0) { throw 'Release publication failed' }
