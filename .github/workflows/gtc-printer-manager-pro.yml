@@ -66,6 +66,36 @@ jobs:
           $b = [System.IO.File]::ReadAllBytes((Resolve-Path dist/GTC_Printer_Manager_Pro.exe))
           if ($b[0] -ne 77 -or $b[1] -ne 90) { throw 'Not a PE executable' }
 
+      - name: Build folder version (no self-extraction at launch)
+        shell: pwsh
+        run: |
+          $root = (Get-Location).Path
+          python -m PyInstaller --noconfirm --clean --onedir --windowed `
+            --name GTC_Printer_Manager_Pro `
+            --distpath distdir --workpath builddir --specpath specdir `
+            --version-file "$root\version_info.txt" `
+            --collect-submodules gtc_prn `
+            --add-binary "$root\vcrt\*.dll;." `
+            main.py
+          if (!(Test-Path distdir/GTC_Printer_Manager_Pro/GTC_Printer_Manager_Pro.exe)) { throw 'folder EXE missing' }
+
+      - name: Smoke test FOLDER version without any Python on PATH
+        shell: pwsh
+        run: |
+          $dir = Join-Path $env:RUNNER_TEMP 'clean_dir'
+          New-Item -ItemType Directory -Force $dir | Out-Null
+          Copy-Item distdir/GTC_Printer_Manager_Pro $dir -Recurse
+          $env:PATH = "$env:SystemRoot\System32;$env:SystemRoot"
+          Remove-Item Env:PYTHONHOME, Env:PYTHONPATH -ErrorAction SilentlyContinue
+          if (Get-Command python -ErrorAction SilentlyContinue) { throw 'python still reachable on PATH' }
+          $out = Join-Path $dir 'selftest.json'
+          $p = Start-Process -FilePath (Join-Path $dir 'GTC_Printer_Manager_Pro\GTC_Printer_Manager_Pro.exe') `
+                 -ArgumentList '--selftest', $out -PassThru
+          if (-not $p.WaitForExit(180000)) { $p.Kill(); throw 'selftest timeout' }
+          if (!(Test-Path $out)) { throw "selftest produced no output (exit $($p.ExitCode))" }
+          $r = Get-Content $out -Raw | ConvertFrom-Json
+          if (-not $r.ok -or $p.ExitCode -ne 0) { throw 'folder selftest failed' }
+
       - name: Smoke test EXE without any Python on PATH
         shell: pwsh
         run: |
@@ -91,9 +121,12 @@ jobs:
           Copy-Item dist/GTC_Printer_Manager_Pro.exe pkg/
           Copy-Item README_FR.md, NOTES_VERSION.md pkg/
           Compress-Archive -Path pkg/* -DestinationPath GTC_Printer_Manager_Pro_Portable_x64.zip -Force
+          Copy-Item README_FR.md, NOTES_VERSION.md distdir/GTC_Printer_Manager_Pro/
+          Compress-Archive -Path distdir/GTC_Printer_Manager_Pro -DestinationPath GTC_Printer_Manager_Pro_Dossier_x64.zip -Force
+          $h3 = (Get-FileHash GTC_Printer_Manager_Pro_Dossier_x64.zip -Algorithm SHA256).Hash
           $h1 = (Get-FileHash dist/GTC_Printer_Manager_Pro.exe -Algorithm SHA256).Hash
           $h2 = (Get-FileHash GTC_Printer_Manager_Pro_Portable_x64.zip -Algorithm SHA256).Hash
-          "$h1  GTC_Printer_Manager_Pro.exe`n$h2  GTC_Printer_Manager_Pro_Portable_x64.zip" |
+          "$h1  GTC_Printer_Manager_Pro.exe`n$h2  GTC_Printer_Manager_Pro_Portable_x64.zip`n$h3  GTC_Printer_Manager_Pro_Dossier_x64.zip" |
             Out-File -Encoding ascii SHA256SUMS.txt
           Get-Content SHA256SUMS.txt
           "### SHA-256`n``````n$(Get-Content SHA256SUMS.txt -Raw)``````" | Out-File -Append $env:GITHUB_STEP_SUMMARY
@@ -105,6 +138,7 @@ jobs:
           path: |
             GTC_Printer_Manager_Pro/dist/GTC_Printer_Manager_Pro.exe
             GTC_Printer_Manager_Pro/GTC_Printer_Manager_Pro_Portable_x64.zip
+            GTC_Printer_Manager_Pro/GTC_Printer_Manager_Pro_Dossier_x64.zip
             GTC_Printer_Manager_Pro/SHA256SUMS.txt
           if-no-files-found: error
 
@@ -115,7 +149,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           $tag = 'gtc-prn-pro-latest'
-          $files = 'dist/GTC_Printer_Manager_Pro.exe','GTC_Printer_Manager_Pro_Portable_x64.zip','SHA256SUMS.txt'
+          $files = 'dist/GTC_Printer_Manager_Pro.exe','GTC_Printer_Manager_Pro_Portable_x64.zip','GTC_Printer_Manager_Pro_Dossier_x64.zip','SHA256SUMS.txt'
           $existing = gh release list --repo "${{ github.repository }}" --json tagName --jq ".[] | select(.tagName == `"$tag`") | .tagName"
           if ($existing -eq $tag) {
             gh release upload $tag @files --clobber --repo "${{ github.repository }}"
